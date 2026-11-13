@@ -10,9 +10,10 @@ __pycache__/
 .pytest_cache/
 
 # ---------------- 依赖与离线包 ----------------
-# vendor/ 是手动解压的 pymupdf wheel（132MB），复原方式见 README：
+# 根目录 vendor/ 是手动解压的 pymupdf wheel（132MB），复原方式见 README：
 #   python -m pip install pymupdf==1.26.4
-vendor/
+# 注意只排除根目录的：web/vendor/ 里是阅读器要用的 pdf.js，必须入库。
+/vendor/
 
 # ---------------- 论文语料（体积大 + 版权，绝不提交）----------------
 papers/
