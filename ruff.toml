@@ -1,0 +1,42 @@
+# PaperPrism 代码门禁：只保留「一定是 bug」的规则，不评价风格。
+#
+# 用法（项目根目录）：  python -m ruff check .
+# 判据：输出 All checks passed! 才算过；只要报了任何一条，都是真问题（不是口味问题）。
+#
+# 为什么不启用默认全家桶：默认规则对本项目跑出 672 条，其中 586 条是
+# %-format / io.open / import 排序 / coding 头这类风格，53% 还来自 .tmp/ 一次性脚本。
+# 噪音率 ~98%，当门禁用会让人直接无视它。
+#
+# 也不建议用 --fix 批量修：131 处 %-format 全是带中文的日志行，换成 .format 是纯 churn。
+
+target-version = "py310"
+
+# 只加排除项，保留 ruff 自带的默认排除（.git / __pycache__ 等）
+extend-exclude = [
+    ".tmp",              # 一次性调试脚本
+    "tools",             # 一次性分析/补丁脚本，不参与产品规范
+    "vendor",            # 解压的 pymupdf wheel
+    "store",             # 运行时书库缓存（JSON）
+    "papers_audit",      # 语料
+    "papers_test",
+    "papers",
+    "_relay",
+    "out",
+    ".box-agent",
+    ".box-agent-scratch",
+]
+
+[lint]
+select = [
+    "E9",      # 语法错误 / 无法解析
+    "E722",    # 裸 except:
+    "F63",     # 非法断言（如 assert (x, y)）
+    "F7",      # break / continue / return 写在循环或函数外
+    "F82",     # 未定义的名字（F821 等）——最重要的一条
+    "F401",    # import 了但没用
+    "F811",    # 同名重复定义（后者悄悄覆盖前者）
+    "F841",    # 赋值了但没用
+    "RUF059",  # 解包了但没用
+    "W605",    # 字符串里的非法转义（如 "D:\Projects"）
+    "B006",    # 可变对象当默认参数
+]

@@ -1,0 +1,38 @@
+# ---------------- 密钥与本地环境 ----------------
+.env
+.env.local
+
+# ---------------- Python ----------------
+__pycache__/
+*.pyc
+*.pyo
+.ruff_cache/
+.pytest_cache/
+
+# ---------------- 依赖与离线包 ----------------
+# vendor/ 是手动解压的 pymupdf wheel（132MB），复原方式见 README：
+#   python -m pip install pymupdf==1.26.4
+vendor/
+
+# ---------------- 论文语料（体积大 + 版权，绝不提交）----------------
+papers/
+papers_audit/
+papers_test/
+*.pdf
+
+# ---------------- 运行时数据 / 生成物（可重建）----------------
+store/
+out/
+.tmp/
+_relay/
+
+# ---------------- Agent / 工具残留 ----------------
+.box-agent/
+.box-agent-scratch/
+nul
+
+# ---------------- 根目录内部文档 ----------------
+# 交付说明、验收报告、识别报告、待定问题、各类 CHECK 清单都含客户/内部信息，
+# 一律不进公开仓库。以后要写公开说明请新建 README.md（下面单独放行）。
+/*.md
+!/README.md

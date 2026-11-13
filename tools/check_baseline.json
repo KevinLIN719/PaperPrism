@@ -1,0 +1,9 @@
+{
+  "_说明": "tools/check.py 的冒烟基线。改完解析代码跑 python tools/check.py；如果某篇的段数/正文字数变了，先判断是改好还是改坏，确认后才更新这里。",
+  "papers": {
+    "papers_audit/c2_aps_ligo.pdf": {"paras": 69, "body_chars": 65176},
+    "papers_audit/c1_acl_bart.pdf": {"paras": 126, "body_chars": 29837},
+    "papers_audit/c5_llama2.pdf": {"paras": 523, "body_chars": 167564},
+    "papers/resnet_1512.03385.pdf": {"paras": 87, "body_chars": 28343}
+  }
+}
