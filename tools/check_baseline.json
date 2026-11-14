@@ -4,6 +4,7 @@
     "papers_audit/c2_aps_ligo.pdf": {"paras": 69, "body_chars": 65176},
     "papers_audit/c1_acl_bart.pdf": {"paras": 126, "body_chars": 29837},
     "papers_audit/c5_llama2.pdf": {"paras": 523, "body_chars": 167564},
-    "papers/resnet_1512.03385.pdf": {"paras": 87, "body_chars": 28343}
+    "papers/resnet_1512.03385.pdf": {"paras": 87, "body_chars": 28343},
+    "papers/ScalingOnlineExploration_2610.22496.pdf": {"paras": 296, "body_chars": 136663}
   }
 }

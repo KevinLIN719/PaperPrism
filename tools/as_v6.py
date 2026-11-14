@@ -33,8 +33,11 @@ def apply_v6():
     _ORIG["is_front_matter"] = M.is_front_matter
     _ORIG["drop_metadata"] = M.drop_metadata
     _ORIG["drop_table_rows"] = M.drop_table_rows
+    _ORIG["drop_toc_headings"] = M.drop_toc_headings
     _ORIG["REFS_BY_FONT_HINT"] = M.REFS_BY_FONT_HINT
     _ORIG["REFS_HINT_AFTER"] = M.REFS_HINT_AFTER
+    _ORIG["ENDS_SENTENCE_NOTE_AWARE"] = M.ENDS_SENTENCE_NOTE_AWARE
+    _ORIG["SHORT_PROSE_JOIN"] = M.SHORT_PROSE_JOIN
 
     v6_caption = re.compile(r"^\s*(?:Figure|Fig\.|Table|TABLE)\s*(?:\d+|[IVX]+)\s*[.:|—–-]", re.A)
     v6_struct = ("abstract", "introduction", "related work", "conclusion",
@@ -220,8 +223,11 @@ def apply_v6():
     M.is_front_matter = is_front_matter_v6
     M.drop_metadata = drop_metadata_v6
     M.drop_table_rows = drop_table_rows_v6
+    M.drop_toc_headings = lambda paras: paras        # v8 的目录行摘除在 v6 里不存在
     M.REFS_BY_FONT_HINT = True
     M.REFS_HINT_AFTER = 0.0                          # v6：首页脚注就能触发
+    M.ENDS_SENTENCE_NOTE_AWARE = False               # v9：段尾脚注号不算说完
+    M.SHORT_PROSE_JOIN = False                       # v9：短半句放行
 
 
 def restore():

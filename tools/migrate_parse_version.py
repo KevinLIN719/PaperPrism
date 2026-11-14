@@ -214,11 +214,12 @@ def repair_by_anchor(path):
 def main():
     files = sorted(f for f in os.listdir(STORE_DIR) if f.endswith(".json"))
     todo = []
+    force = "--force" in sys.argv
     for f in files:
         p = os.path.join(STORE_DIR, f)
         with io.open(p, encoding="utf-8") as fh:
             d = json.load(fh)
-        if ((d.get("parse") or {}).get("parse_version")) != m1_parse.PARSE_VERSION:
+        if force or ((d.get("parse") or {}).get("parse_version")) != m1_parse.PARSE_VERSION:
             todo.append(p)
     print("需要升级 %d / %d 篇%s" % (len(todo), len(files), "（dry-run）" if DRY else ""))
     if not DRY and todo:

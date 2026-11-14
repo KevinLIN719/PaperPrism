@@ -216,7 +216,20 @@ def page_blocks(page):
 
         for grp in out:
             texts = ["".join(sp["text"] for sp in l["spans"]) for l in grp]
-            text = clean_text(join_lines(texts))
+            # v10（T01）：等宽字体占比。代码清单用的是 Mono 字体（Scaling 附录是
+            # BeraSansMono 6.4pt），在此之前被「字号 < 正文 0.9 倍」那条脚注规则整块吃掉。
+            mono_n = mono_all = 0
+            for l in grp:
+                for sp in l["spans"]:
+                    n = len(sp["text"].strip())
+                    if not n:
+                        continue
+                    mono_all += n
+                    if MONO_FONT.search(sp.get("font") or ""):
+                        mono_n += n
+            mono = round(mono_n / mono_all, 2) if mono_all else 0.0
+            # 代码保留原始行结构：join_lines 会把换行拼成一句，源代码就没法读了
+            text = clean_text("\n".join(texts) if mono >= CODE_MONO_MIN else join_lines(texts))
             if not text.strip():
                 continue
             fs = max((sp["size"] for l in grp for sp in l["spans"]), default=0.0)
@@ -230,6 +243,7 @@ def page_blocks(page):
                 "nlines": len(grp),
                 "h": (gy1 - gy0) / max(len(grp), 1),
                 "fs": fs,
+                "mono": mono,
                 # 首字下沉：整个块只有一个字母，字号却远大于正文
                 "dropcap": bool(re.fullmatch(r"[A-Za-z]", text.strip())),
             })
@@ -281,15 +295,21 @@ def detect_columns(blocks):
     """
     if not blocks:
         return 1, []
+    # v10（T07）：代码清单的每行左边缘随缩进乱跳、行宽又常撑到整页，
+    # 会伪造出「左边缘簇」并把典型行宽算小，把单栏的代码附录页判成 2–3 栏。
+    # 判栏数时先把等宽字体块摘出去。
+    probe = [b for b in blocks if not _is_code_block(b)]
+    if len(probe) < 4:
+        probe = blocks
     page_x0 = min(b["bbox"][0] for b in blocks)
     page_x1 = max(b["bbox"][2] for b in blocks)
     content_w = page_x1 - page_x0
     if content_w <= 0:
         return 1, []
 
-    n_le, xs_le = _columns_by_left_edges(blocks, page_x0, content_w)
+    n_le, xs_le = _columns_by_left_edges(probe, page_x0, content_w)
     if n_le >= 2:
-        typ = _dominant_width(blocks, content_w)
+        typ = _dominant_width(probe, content_w)
         if typ:
             n = max(1, min(4, int(round(content_w / typ))))
             if n < 2:
@@ -298,8 +318,18 @@ def detect_columns(blocks):
         return n_le, xs_le
 
     # 没有成形的左边缘簇：长块宽度中位数更稳
-    longs = [b for b in blocks if b["nlines"] >= 4]
+    longs = [b for b in probe if b["nlines"] >= 4]
     if not longs:
+        return 1, []
+    # v10（T07）：连「长块」自己都没有两个左边缘簇，就说明这页文字其实只有一个起点
+    # （gpt4 的代码附录页：每行缩进不同但都从同一个左边距开始，行宽被代码撑到整页，
+    # 旧逻辑会把它判成 2–3 栏，整页按栏交错重排而乱序）。
+    lx = sorted(b["bbox"][0] for b in longs)
+    starts = 1
+    for i in range(1, len(lx)):
+        if lx[i] - lx[i - 1] >= content_w * 0.15:
+            starts += 1
+    if starts < 2:
         return 1, []
     widths = [b["bbox"][2] - b["bbox"][0] for b in longs
               if (b["bbox"][2] - b["bbox"][0]) >= content_w * 0.25]
@@ -448,17 +478,6 @@ def _overlaps(a, b, tol=1.0):
     return x > tol and y > tol
 
 
-def _side_by_side(a, b):
-    """两个块是不是并排（表格单元格那种），而不是上下相邻。
-
-    上下相邻的块，bbox 偶尔会叠几个点（行框比字大），所以用「叠得比块高度的一半还多」才算并排。
-    """
-    y = min(a[3], b[3]) - max(a[1], b[1])
-    if y <= 1.0:
-        return False
-    return y > min(a[3] - a[1], b[3] - b[1]) * 0.5
-
-
 def merge_overlapping_rects(rects):
     """把同一段里互相叠住的矩形并成一个大矩形（否则前端会画出两层边框）。"""
     out = []
@@ -534,6 +553,107 @@ def _ends_sentence(text):
     return s.endswith(SENT_END)
 
 
+def _is_code_block(b):
+    """等宽字体占比够高 → 代码行。"""
+    return (b.get("mono") or 0.0) >= CODE_MONO_MIN
+
+
+def group_code_blocks(blocks):
+    """v10（T01）：把等宽字体的连续行并成「一段代码清单」。
+
+    代码在 PDF 里是一行一个块，而且行号偶尔会用别的字体渲染（Scaling 第 49 页的
+    「20」「21」是 DejaVuSans 5.6pt），所以先按「左边缘 + 纵向间距」聚成清单，
+    再交给正常排版流程——这样一段代码就是一个段落，不会碎成几十个 20 字符的碎片。
+    返回 (非代码块列表, 代码块列表)。
+    """
+    def _num_only(b):
+        t = (b.get("text") or "").strip()
+        return len(t) <= 3 and t.isdigit()
+
+    mono = [b for b in blocks if _is_code_block(b)]
+    rest = [b for b in blocks if not _is_code_block(b)]
+    if not mono:
+        return blocks, []
+    # 行号列偶尔用别的字体渲染（Scaling 第 49 页的「20」「21」是 DejaVuSans 5.6pt）：
+    # 只有紧贴某个等宽块的数字才算行号，散落在页边的页码/坐标轴数字不能当代码。
+    extra = []
+    for b in list(rest):
+        if not _num_only(b):
+            continue
+        for m in mono:
+            if (abs(b["bbox"][1] - m["bbox"][1]) < 12
+                    and m["bbox"][0] - 60 < b["bbox"][0] < m["bbox"][2] + 60):
+                extra.append(b)
+                rest.remove(b)
+                break
+    # 行号不能单独占一行：找同一行左边最近的那个代码块，拼成「20　TEXT」
+    prefix = {}
+    used_num = set()
+    for b in extra:
+        best, bestd = None, None
+        for m in mono:
+            dy = abs(b["bbox"][1] - m["bbox"][1])
+            dx = m["bbox"][0] - b["bbox"][2]
+            if dy < 6 and dx > -2 and (bestd is None or (dy, dx) < bestd):
+                best, bestd = m, (dy, dx)
+        if best is not None:
+            prefix[id(best)] = (b["text"] or "").strip()
+            used_num.add(id(b))
+    code = mono + extra
+    # 先按左边缘分列（容差 40pt：同一清单的缩进不会跨这么大的台阶），再按纵向顺序聚
+    code.sort(key=lambda b: (b["bbox"][0] // 40, b["bbox"][1]))
+    runs = []
+    for b in code:
+        if runs:
+            prev = runs[-1][-1]
+            lh = max(prev.get("h") or 0.0, b.get("h") or 0.0, 1.0)
+            same_col = abs(b["bbox"][0] - prev["bbox"][0]) < 40
+            gap = b["bbox"][1] - prev["bbox"][3]
+            if same_col and gap < lh * 3.0:
+                runs[-1].append(b)
+                continue
+        runs.append([b])
+    out = []
+    for run in runs:
+        lines = []
+        for b in run:
+            if id(b) in used_num:
+                continue
+            t = (b["text"] or "").strip()
+            if not t:
+                continue
+            ln = prefix.get(id(b))
+            if ln:
+                lines.append(ln + "  " + t)
+            else:
+                lines.extend(t.split("\n"))
+        # 单行行号（「10」「11」…）并到下一行的行首：多行等宽块整体成一个块时，
+        # 行号块与它不同高，上面那套 bbox 对齐找不到它，这里按顺序兜住。
+        merged, i = [], 0
+        while i < len(lines):
+            if re.fullmatch(r"\d{1,3}", lines[i].strip()) and i + 1 < len(lines):
+                merged.append(lines[i].strip() + "  " + lines[i + 1].strip())
+                i += 2
+            else:
+                merged.append(lines[i])
+                i += 1
+        text = "\n".join(merged)
+        if not text.strip():
+            continue
+        out.append({
+            "bbox": (min(b["bbox"][0] for b in run), run[0]["bbox"][1],
+                     max(b["bbox"][2] for b in run), run[-1]["bbox"][3]),
+            "text": text,
+            "nlines": sum(b.get("nlines") or 1 for b in run),
+            "h": run[0].get("h") or 0.0,
+            "fs": run[0].get("fs") or 0.0,
+            "mono": 1.0,
+            "dropcap": False,
+            "code": True,
+        })
+    return rest, out
+
+
 def merge_paragraphs(blocks):
     """上下紧挨着、且上一块没说完的，并成一段。"""
     lh = median_line_height(blocks)
@@ -542,6 +662,16 @@ def merge_paragraphs(blocks):
         if paras:
             prev = paras[-1]
             gap = b["bbox"][1] - prev["bbox"][3]
+            # v10（T01）：代码行单独成段，行与行之间用换行拼（代码的空格缩进有意义，
+            # 不能走 join_lines 的「单词间补空格」逻辑），也不参与后面的句末判断。
+            if prev.get("code") and _is_code_block(b) and prev["col"] == b["col"]:
+                lh_c = max(prev.get("h") or 0.0, b.get("h") or 0.0, 1.0)
+                if gap < lh_c * 1.9:
+                    prev["text"] = prev["text"].rstrip("\n") + "\n" + (b["text"] or "").strip()
+                    prev["bbox"] = (prev["bbox"][0], prev["bbox"][1], b["bbox"][2], b["bbox"][3])
+                    prev["nlines"] += b["nlines"]
+                    prev["rects"].append(_rect_of(b))
+                    continue
             # 中文期刊的一行常常就是一个 block（PyMuPDF 不给整段），一行只有 20 来个字，
             # 过不了「> 80 字符」这道门槛，整段就被切成十几个碎块。
             # 所以 CJK 块改用「CJK 字符数 ≥ 8」判，并按中文句末标点判断「说完没有」。
@@ -580,6 +710,7 @@ def merge_paragraphs(blocks):
                 continue
         p = dict(b)
         p["rects"] = [_rect_of(b)]
+        p["code"] = _is_code_block(b)       # v10（T01）：代码段标记，供 kind/保字规则使用
         paras.append(p)
     return paras
 
@@ -616,6 +747,12 @@ HEAD_FUNCTION_WORDS = {"of", "the", "and", "in", "for", "with", "a", "an", "to",
                        "or", "as", "by", "from", "via", "at", "is", "are", "vs", "vs.",
                        "its", "their", "our", "into", "over", "under", "between"}
 CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
+
+# v10（T01）：等宽字体 = 代码清单。字体名比字号可靠得多，Scaling 的附录代码是
+# BeraSansMono 6.4pt，正文是 URWPalladioL 10pt；只看字号会把它当脚注整块丢掉。
+MONO_FONT = re.compile(r"(?i)(mono|courier|consol|menlo|inconsolata|sourcecode|"
+                       r"source\s*code|code\s*pro|fira\s*code|jetbrains|lucid[ae]?console)")
+CODE_MONO_MIN = 0.6        # 一个块里 ≥60% 字符是等宽字体，就算代码行
 
 # v8：表格里的分数行（「23.75 Deep-Att + PosUnk [39]」「36.29 Tuned BART」）会被当成编号标题。
 # 章节号不会「父级 ≥ 20 还带两位小数」，所以这条能精确挡掉分数、放行「5.10」这种真实小节。
@@ -1190,7 +1327,7 @@ LAST_EMPTY_REASON = None
 
 # 解析规则的版本号：改了分段/分类规则就 +1，服务端据此把旧书库里的解析结果判为过期、
 # 重新解析并重新批注（否则修好的分类逻辑对已经解析过的论文不生效）。
-PARSE_VERSION = 9
+PARSE_VERSION = 10
 
 
 def _rect_of(b):
@@ -1375,15 +1512,20 @@ def parse_pdf(path, only_page=None):
         if tables:
             blocks = drop_table_blocks(blocks, tables)     # 表格单元格不当正文段落
         blocks = drop_table_rows(blocks)                   # 没有框线的表格也按版面夹缝丢掉
+        # v10（T01）：等宽字体行先聚成「一段代码清单」，再进排版流程
+        _rest, _code = group_code_blocks(blocks)
+        blocks = _rest
         LAST_PAGE_SIZES[pno] = [round(page.rect.width, 1), round(page.rect.height, 1)]
         if pno == 1:
             hint = detect_columns(blocks)           # 先用整页版面判分栏
             blocks = [b for b in drop_above_title(blocks) if not is_front_matter(b["text"])]       # 再丢掉上一篇论文的残留
+            blocks = blocks + _code                 # 代码清单不参与「上一篇论文残留」过滤
             LAST_PAGE_COLS[pno] = hint[0]
             ordered = move_pre_title_tail(
                 attach_dropcaps(order_blocks(blocks, page.rect.width, hint)))
         else:
             LAST_PAGE_COLS[pno] = detect_columns(blocks)[0]
+            blocks = blocks + _code
             ordered = attach_dropcaps(order_blocks(blocks, page.rect.width))
         for b in ordered:
             b["page"] = pno
@@ -1392,6 +1534,10 @@ def parse_pdf(path, only_page=None):
         for para in merge_paragraphs(ordered):
             pfs = para.get("fs") or 0.0
             k = "title" if para.get("title") else kind_of(para["text"], pfs, body_fs)
+            # v10（T01）：等宽字体块 = 代码清单。它既不是正文也不是脚注，
+            # 直接定成 code，绕过下面两条「像脚注/像表格」的丢弃规则。
+            if para.get("code"):
+                k = "code"
             t = para["text"]
             # 出版社/平台样板文案（Downloaded from …、ISSN …）：整段丢
             if is_boilerplate(t):
@@ -1412,7 +1558,9 @@ def parse_pdf(path, only_page=None):
             # 字号明显小于正文的块 = 脚注 / 参考文献条目 / 版权小字，不是正文。
             # 留 0.05 的余量：0.9*10.0 在浮点里是 9.000000000000002，
             # 会让 9.0 号的图注被误判成「小于正文 0.9 倍」而整批丢掉。
-            if body_fs and pfs and pfs < body_fs * 0.9 - 0.05:
+            if k == "code":
+                pass                 # v10（T01）：代码块不看字号、不看句读，原样保留
+            elif body_fs and pfs and pfs < body_fs * 0.9 - 0.05:
                 # 「小字 + 像引用」只在文档靠后、或已经见过 References 标题时才进 in_refs。
                 # 否则首页脚注会把整篇论文判成参考文献区（A 部分 F1）。
                 if REFS_BY_FONT_HINT and (seen_refs_heading or where >= REFS_HINT_AFTER):
@@ -1420,7 +1568,7 @@ def parse_pdf(path, only_page=None):
                         in_refs = True
                         refs_by_hint = not seen_refs_heading
                 continue
-            if not keep(t, k):
+            if k != "code" and not keep(t, k):
                 continue
             if k == "body" and not body_fs:
                 body_fs = para.get("fs") or 0.0
