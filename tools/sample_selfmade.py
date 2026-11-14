@@ -25,8 +25,12 @@ OUT_CSV = os.path.join(ROOT, "out", "自创术语抽查_样本.csv")
 OUT_JSON = os.path.join(ROOT, "out", "自创术语抽查_样本.json")
 
 
-def rows_from_store():
-    """把 store 里所有 selfmade 批注摊平成行。"""
+def rows_from_store(term_level=False):
+    """把 store 里所有 selfmade 批注摊平成行。
+
+    term_level=True 时按术语逐条摊开（同一个词在不同段重复出现只留第一次），
+    用于 P1 之后的新口径：一个段落可能同时含既有概念与自创词，段落级行说不清。
+    """
     out = []
     for f in sorted(glob.glob(os.path.join(ROOT, "store", "*.json"))):
         try:
@@ -46,6 +50,27 @@ def rows_from_store():
                 continue
             p = paras[i] if 0 <= i < len(paras) else {}
             text = (p.get("text") or "").strip()
+            if term_level:
+                seen_terms = set()
+                for t in (a.get("terms") or []):
+                    if not isinstance(t, dict) or not t.get("selfmade") or not t.get("t"):
+                        continue
+                    name = t["t"].strip()
+                    if name.lower() in seen_terms:
+                        continue
+                    seen_terms.add(name.lower())
+                    out.append({
+                        "paper": paper,
+                        "store": os.path.basename(f),
+                        "idx": i,
+                        "page": p.get("page"),
+                        "terms": name + ("（" + t["zh"] + "）" if t.get("zh") else ""),
+                        "one_line": a.get("one_line") or "",
+                        "note": "命名依据：" + (t.get("why") or ""),
+                        "anchor": (a.get("anchor") or {}).get("head") or "",
+                        "para_text": text[:700],
+                    })
+                continue
             out.append({
                 "paper": paper,
                 "store": os.path.basename(f),
@@ -58,6 +83,24 @@ def rows_from_store():
                 "anchor": (a.get("anchor") or {}).get("head") or "",
                 "para_text": text[:700],
             })
+    return out
+
+
+def dedupe_terms(rows):
+    """术语级去重：同一篇里「RAX (Robot Agent eXploration)」「RAX」算同一个词，留第一次出现的。"""
+    import re as _re
+    seen = set()
+    out = []
+    for r in rows:
+        base = r.get("terms") or ""
+        for _ in range(2):                     # 「RAX (Robot Agent eXploration)（中文）」
+            base = _re.sub(r"\s*[(（].*?[)）]\s*$", "", base).strip()
+        base = base.lower()
+        key = (r.get("paper"), base)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(r)
     return out
 
 
@@ -94,9 +137,14 @@ def pick_even(items, k):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=30, help="抽样条数（默认 30，brief 要求的数字）")
+    ap.add_argument("--terms", action="store_true",
+                    help="术语级：按术语逐条摊开（P1 之后的口径），同一篇里重复出现的词只留一次")
+    ap.add_argument("--out", default="", help="输出文件名前缀（默认 out/自创术语抽查_样本）")
     args = ap.parse_args()
 
-    rows = rows_from_store()
+    rows = rows_from_store(term_level=args.terms)
+    if args.terms:
+        rows = dedupe_terms(rows)
     if not rows:
         raise SystemExit("store/ 里没有 selfmade 标注，先跑几篇论文的批注再来抽。")
 
@@ -113,20 +161,23 @@ def main():
     sample.sort(key=lambda r: (r["paper"], r["idx"]))
 
     os.makedirs(os.path.join(ROOT, "out"), exist_ok=True)
+    base = args.out or os.path.join(ROOT, "out", "自创术语抽查_样本")
+    out_csv = base + ".csv"
+    out_json = base + ".json"
     cols = ["paper", "idx", "page", "terms", "one_line", "note", "anchor", "para_text",
             "判定", "依据", "若为既有需给出处", "置信度", "备注"]
-    with open(OUT_CSV, "w", encoding="utf-8-sig", newline="") as fh:
+    with open(out_csv, "w", encoding="utf-8-sig", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=cols)
         w.writeheader()
         for r in sample:
             w.writerow({c: r.get(c, "") for c in cols})
-    with open(OUT_JSON, "w", encoding="utf-8") as fh:
+    with open(out_json, "w", encoding="utf-8") as fh:
         json.dump(sample, fh, ensure_ascii=False, indent=2)
 
     print("样本池：%d 条自创标记，来自 %d 篇" % (len(rows), len(per_paper)))
     for paper in sorted(per_paper):
         print("  %-42s 池 %3d → 抽 %2d" % (paper, len(per_paper[paper]), q[paper]))
-    print("合计抽取 %d 条 → %s" % (len(sample), OUT_CSV))
+    print("合计抽取 %d 条 → %s" % (len(sample), out_csv))
 
 
 if __name__ == "__main__":
