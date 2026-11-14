@@ -223,6 +223,8 @@
   .annbox span { display: block; margin-top: 3px; font-size: 12px; color: #7a7160; }
   .annbox .terms { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 5px; }
   .annbox .terms i { font-style: normal; font-size: 11.5px; padding: 1px 7px; border-radius: 999px; background: #f1ece1; color: #6b6355; }
+  .annbox .terms i.sm { background: #f0e2c8; color: #7a5c1f; }
+  .annbox .terms i.sm::before { content: "◆ "; font-size: 9px; }
   #note { margin-top: 14px; padding: 10px 12px; border-radius: 8px; background: #fff5d6; border: 1px solid #e8d9a6; color: #6d5c25; font-size: 12.5px; display: none; }
 
 /* ---------- 第一跳摘要卡片 ---------- */
@@ -1133,11 +1135,15 @@ function renderAnnots(i) {
     return "";
   }
   const terms = (a.terms || [])
-    .map((t) => `<i>${escapeHtml(t.t)}${t.zh ? " · " + escapeHtml(t.zh) : ""}</i>`)
+    .map((t) => `<i${t.selfmade ? ' class="sm" title="本文自创' + (t.why ? "：" + escapeHtml(t.why) : "") + '"' : ""}>${
+      escapeHtml(t.t)}${t.zh ? " · " + escapeHtml(t.zh) : ""}${t.selfmade ? "（自创）" : ""}</i>`)
     .join("");
   const role = a.role || "";
   const badge = role ? `<span class="role mk-${role}">${role}</span>` : "";
-  const sm = a.selfmade ? `<span class="selfmade">本文自创</span>` : "";
+  const selfmadeCount = (a.terms || []).filter((t) => t.selfmade).length;
+  const sm = selfmadeCount
+    ? `<span class="selfmade" title="本段有 ${selfmadeCount} 个术语是本文作者自己命名的">本文自创 ${selfmadeCount} 个术语</span>`
+    : (a.selfmade ? `<span class="selfmade">本文自创</span>` : "");
   return `<div class="annbox ${role ? "role-" + role : ""}">${badge}${sm}<b>${escapeHtml(a.one_line)}</b>${
     a.note ? `<span>${escapeHtml(a.note)}</span>` : ""
   }${terms ? `<div class="terms">${terms}</div>` : ""}</div>`;

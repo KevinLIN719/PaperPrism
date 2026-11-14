@@ -687,8 +687,10 @@ ANNO_HINT = """只输出这个 JSON：
            "role":"这段在论证链条里担任什么角色，只能从这五个里选一个：背景 / 缺口 / 方法 / 证据 / 局限",
            "one_line":"这段话在说什么（≤30 字，中文，具体，不要空话）",
            "note":"读这段要抓什么，或它和全文哪部分有关（≤25 字）",
-           "terms":[{"t":"英文术语原文","zh":"中文译名"}],
-           "selfmade":这段是否在给本文自己造的术语下定义（true/false）}]}
+           "terms":[{"t":"英文术语原文","zh":"中文译名",
+                     "selfmade":这个术语是不是本文作者自己造的/命名的（true/false，判断见下）,
+                     "why":"写 true 时给一句话依据（≤20 字，引用本段的命名动作）"}],
+           "selfmade":本段是否在给本文自己造的术语下定义（等价于 terms 里有 true）}]}
 
 role 的判断标准（务必区分，不要全填一个）：
 - 背景：领域现状、前人都做了什么、常识前提
@@ -700,7 +702,96 @@ role 的判断标准（务必区分，不要全填一个）：
 要求：
 - 每段都要有一条，idx 用我给的 [#编号]，不要改。
 - one_line 要具体：出现数字/结论就把数字写进去，禁止“介绍了背景”这种废话。
-- terms 每段 0–3 个，只挑读者可能不认识的专业词；selfmade 只在段落在定义作者自造的概念时写 true。"""
+- terms 每段 0–3 个，只挑读者可能不认识的专业词。
+
+selfmade 的判定（重要，按四步走，不要凭“这段里有自创词”就写 true）：
+1) 先在这一段里找**命名/定义动作**：we propose / introduce / present / call / term / name / define、
+   “we refer to X as / X is dubbed / we coin”、专名后紧跟括号全称或缩写（如 RAX (Robot Agent eXploration)）、
+   或段首「术语.」后紧跟一句定义。找不到 → false。
+2) 若命名动作发生在**别的段落**（本段只是使用它、复述、或写 “as we discussed in the introduction”）→ false。
+3) 若本段在给某词下定义时**带文献标号**（如 [2, 34, 49]、(26)），或出现 familiar from / adopted from /
+   following prior work / has been suggested / 行业通行指标 → false（那是沿用的既有概念，不是本文自创）。
+4) 以下一律 false：匿名化代称（hereafter, the “AI firm”）、变量名与分组口径（quintile、high-skill 等）、
+   产品名 / 公司名、他人数据集或 benchmark、某个任务里造出来的具体实例、普通英文词被临时借用但没有本文定义。
+只有「本文提出的方法 / 模块 / 指标 / 自建数据集 / 理论概念」这类**论文级命名**才算 true。
+
+正例（应写 true）：
+- “In this work we propose the Transformer, a model architecture eschewing recurrence…”（we propose + 专名）
+- “We introduce RAX (Robot Agent eXploration), an open-source framework…”（专名 + 括号全称）
+- “Budget and scenes. The exploration budget counts exploration episodes.”（段首术语 + 定义句）
+反例（应写 false）：
+- “Shortcut connections [2, 34, 49] are those skipping one or more layers.”（带引用标号 = 沿用既有概念）
+- “... provides AI-based customer service support software (hereafter, the “AI firm”)”（匿名化代称）
+- “In this section, we demonstrate how RAX achieves continual learning…”（只是使用，不是定义）
+
+terms 里每个词单独给 selfmade（术语级，不要整段一个结论）：
+- 同一段里可能既有既有概念又有本文命名：既有概念写 false，本文命名的写 true。
+- 写 true 时必须满足上面四步里的“本段命名动作”，且那句动作指向的就是这个词；why 里摘出那句动作（如 “we propose the Transformer”）。
+- 段落级 selfmade = terms 里是否有 true；terms 为空时按上面四步单独判。
+"""
+
+
+# selfmade 的确定性兜底：模型说 true 时，本段还得真找得到命名/定义动作。
+# 2026-11-14 用 30 条人工抽查做反事实：关闭时 precision 33%，开启后 86%（标记数 30→7，召回 6/10）。
+# 宁可少标（漏掉几条真自创）也不要错标——错标会让读者把作者生造的词当成领域共识。
+SELF_MADE_GUARD = True
+
+_SM_NAMING = re.compile(
+    r"(?i)\b(we|this paper|our (?:work|paper|study))\s+(?:hereby\s+)?"
+    r"(propose|introduce|present|call|term|name|define|establish|coined|dub)|"
+    r"\bwe\s+refer\s+to\b|\breferred\s+to\s+as\b|\bdubbed\b|\bcoined\b|\buse\s+the\s+term\b|"
+    r"\bwe\s+(?:modify|re-?design|design|change)\b[^.]{0,60}?\bas\b")
+_SM_DEF = re.compile(
+    r"(?i)\b(is|are)\s+defined\s+as\b|\bdefined\s+as\b|\bdenotes?\b|\bwe\s+define\b|"
+    r"\bwe\s+call\b|\bcounts?\b|\bwe\s+measure\b")
+_SM_LEAD_TERM = re.compile(r"^([A-Z][A-Za-z\-]*(?:\s+[A-Za-z\-]+){0,4})\.\s")
+_SM_ACRO = re.compile(r"\b([A-Z][A-Za-z\-]+(?:\s+[A-Za-z\-]+){0,4})\s*\(([A-Z]{2,}[A-Za-z0-9\-]*)\)")
+_SM_ACRO2 = re.compile(r"\b([A-Z]{2,}[A-Za-z0-9\-]*)\s*\(([A-Z][A-Za-z\-]+(?:\s+[A-Za-z\-]+){1,6})\)")
+_SM_QUOTED = re.compile(r"(?i)\b(call|term|name|dub|refer to)\b[^.]{0,60}[\"“]")
+_SM_ANON = re.compile(r"(?i)hereafter,?\s+the\s+[\"“]")
+_SM_FAMILIAR = re.compile(r"(?i)\b(familiar from|adopted from|borrowed from|following prior work)\b")
+
+
+def selfmade_ok(text):
+    """这一段本段有没有“在给它命名/定义”的证据（没有就不是本文自创）。"""
+    t = re.sub(r"\s+", " ", text or "").strip()
+    if not t:
+        return False
+    if _SM_ANON.search(t) or _SM_FAMILIAR.search(t):
+        return False
+    if _SM_NAMING.search(t) or _SM_ACRO.search(t) or _SM_ACRO2.search(t):
+        return True
+    if _SM_QUOTED.search(t):
+        return True
+    # 段首「术语.」+ 同段有定义动词（Budget and scenes. / Rehearsal. 这类自查表写法）
+    return bool(_SM_LEAD_TERM.match(t)) and bool(_SM_DEF.search(t)) and len(t) < 700
+
+
+def strong_definition(text):
+    """自查表式定义段：段首「术语.」+ 同段定义动词（Budget and scenes. X counts ...）。"""
+    t = re.sub(r"\s+", " ", text or "").strip()
+    return bool(_SM_LEAD_TERM.match(t)) and bool(_SM_DEF.search(t)) and len(t) < 700
+
+
+_CITE_TAIL = re.compile(r"^\s*(?:\[\d|\(\d)")
+
+
+def term_selfmade_ok(text, term):
+    """术语级兜底：这个词在本段里得真被命名，且不是“术语 + 文献标号”的沿用写法。"""
+    text = text or ""
+    if not selfmade_ok(text):
+        return False
+    words = re.findall(r"[A-Za-z]+", (term or "").lower())
+    if not words:
+        return False
+    pat = r"\b" + r"\W+".join(re.escape(w) for w in words[:3])
+    low = text.lower()
+    m = re.search(pat, low)
+    if not m:
+        return False
+    if _CITE_TAIL.match(low[m.end():m.end() + 40]):
+        return False
+    return True
 
 
 def annotate_batch(parsed, idxs, timeout=120):
@@ -744,9 +835,16 @@ def annotate_batch(parsed, idxs, timeout=120):
         if not one:
             continue
         terms = []
+        text_i = paras[i].get("text") or ""
+        any_sm = False
         for t in (it.get("terms") or [])[:3]:
             if isinstance(t, dict) and t.get("t"):
-                terms.append({"t": _s(t.get("t"), 40), "zh": _s(t.get("zh"), 40)})
+                tt = _s(t.get("t"), 40)
+                sm = bool(t.get("selfmade")) and (not SELF_MADE_GUARD or term_selfmade_ok(text_i, tt))
+                any_sm = any_sm or sm
+                terms.append({"t": tt, "zh": _s(t.get("zh"), 40),
+                              "selfmade": sm,
+                              "why": _s(t.get("why"), 40) if sm else ""})
         role = _s(it.get("role"), 8).strip()
         if role not in ROLES:
             role = ""
@@ -756,7 +854,9 @@ def annotate_batch(parsed, idxs, timeout=120):
             "one_line": one,
             "note": _s(it.get("note"), 60),
             "terms": terms,
-            "selfmade": bool(it.get("selfmade")),
+            "selfmade": any_sm
+                        or (bool(it.get("selfmade")) and (not SELF_MADE_GUARD or selfmade_ok(text_i)))
+                        or (SELF_MADE_GUARD and strong_definition(text_i)),
             "anchor": paras[i].get("anchor"),
         })
     meta = {
