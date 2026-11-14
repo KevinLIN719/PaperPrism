@@ -44,9 +44,22 @@
   #go { background: var(--accent); color: #fff; border-color: var(--accent); }
   /* 窗口窄（比如演示时左半屏 1280px）时，状态文字先被截断，不要挤到按钮换行 */
   #stats {
-    margin-left: auto; color: var(--muted); font-size: 12px; white-space: nowrap;
-    flex: 1 1 320px; min-width: 0; overflow: hidden; text-overflow: ellipsis; text-align: right;
+    color: var(--muted); font-size: 12px; line-height: 1.4;
+    flex: 1 1 240px; min-width: 0; text-align: right;
+    white-space: normal; overflow-wrap: anywhere;
   }
+  /* 成本/tokens/模型单独一格：窗口窄时它会整体换到第二行，而不是被截掉尾巴 */
+  #usage {
+    color: var(--muted); font-size: 12px; white-space: nowrap; flex: none;
+    margin-left: auto; padding-left: 10px; text-align: right;
+  }
+  /* 页码显示框：跟着滚动变，也可以直接输入页码跳过去 */
+  #pagemeter { display: flex; align-items: center; gap: 4px; flex: none; font-size: 12px; color: var(--muted); }
+  #pnum {
+    width: 46px; padding: 3px 4px; border: 1px solid var(--line); border-radius: 6px;
+    background: #fff; font: inherit; font-size: 12px; text-align: center; color: var(--ink, #2b2721);
+  }
+  #pnum:focus { outline: 2px solid rgba(160,64,47,.25); border-color: var(--accent); }
   #scroll { flex: 1; overflow: auto; padding: 20px; }
   #pages { display: flex; flex-direction: column; align-items: center; gap: 20px; }
 
@@ -125,12 +138,20 @@
   #panel h3 { font-size: 13px; letter-spacing: .5px; margin: 0; padding: 14px 16px 10px; color: var(--muted); font-weight: 600; }
   #panel .body { padding: 0 16px 20px; overflow: auto; font-size: 13px; line-height: 1.7; flex: 1; min-height: 120px; }
   .hint { color: var(--muted); font-size: 12px; }
+  /* S3 版式诚实：非 arXiv 单/双栏版式在首屏常驻一条黄条，不自动消失，直到换下一篇 */
+  #layoutwarn {
+    margin: 0 0 10px; padding: 8px 12px; font-size: 12.5px; line-height: 1.6;
+    background: #fdf3d8; color: #7a5a12; border: 1px solid #ead9a4; border-left: 4px solid #d9a521;
+    border-radius: 4px;
+  }
+  #layoutwarn b { color: #6b4d0d; }
   .row { display: flex; gap: 8px; margin: 10px 0 0; font-size: 12px; }
   .tag { padding: 1px 7px; border-radius: 999px; background: #efeadf; color: #6b6355; }
   .tag.k-body { background: #e7eef7; color: #3a5876; }
   .tag.k-heading { background: #f6e7e2; color: #8a3f22; }
   .tag.k-caption { background: #ece9f7; color: #4f4276; }
   .tag.k-title { background: #f6e7e2; color: #8a3f22; }
+  .tag.k-code { background: #e5efe7; color: #2f5d43; }
   pre.anchor { margin: 8px 0 0; padding: 8px 10px; background: #f2eee5; border-radius: 6px; font-size: 11.5px; line-height: 1.6; white-space: pre-wrap; word-break: break-all; font-family: ui-monospace, Consolas, monospace; }
   hr { border: 0; border-top: 1px dashed var(--line); margin: 14px 0; }
   /* 原文折叠块：点开段落先看到批注，原文一点展开 */
@@ -141,6 +162,7 @@
   .srcbox[open] > summary::before { content: "▾ "; }
   .srcbox[open] > summary { margin-bottom: 6px; }
   .text { font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif; font-size: 13.5px; line-height: 1.8; color: #2b2721; }
+  .text.code { font-family: ui-monospace, Consolas, "Courier New", monospace; font-size: 12.5px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; background: #f7f4ec; border-radius: 6px; padding: 8px 10px; }
   .todo { margin-top: 18px; padding: 10px 12px; border-left: 3px solid #d8cbb0; background: #faf6ec; color: #7a7160; font-size: 12px; line-height: 1.7; }
   /* 逐段批注（标记只放在右栏，正文保持原来"悬浮/点选整段变黄"的样子） */
   .annbox { margin: 10px 0 4px; padding: 9px 11px; border-left: 3px solid #c9a227; background: #fffdf3; border-radius: 4px; }
@@ -327,6 +349,25 @@
   .rnode.r-证据 .rrole { color: #2e7d54; }
   .rnode.r-局限 .rrole { color: #7a5c9e; }
 </style>
+
+<style>
+/* 模型设置弹窗（只在点「设置」时出现，不占主界面） */
+.setmask { position: fixed; inset: 0; background: rgba(40,35,28,.42); display: none; align-items: center; justify-content: center; z-index: 90; }
+.setmask.on { display: flex; }
+.setbox { width: min(520px, 92vw); background: #fffdf8; border: 1px solid #ddd4c4; border-radius: 12px; padding: 18px 18px 14px; box-shadow: 0 18px 50px rgba(60,50,35,.25); font-size: 13px; color: #333; }
+.seth { display: flex; align-items: center; justify-content: space-between; font-size: 14px; margin-bottom: 6px; }
+.setx { cursor: pointer; color: #8a8272; padding: 0 4px; }
+.sethint { color: #7c7566; font-size: 12px; line-height: 1.6; margin: 0 0 12px; }
+.setrow { display: flex; align-items: center; gap: 10px; margin-bottom: 9px; }
+.setrow > span { flex: none; width: 68px; color: #6d6658; }
+.setrow input, .setrow select { flex: 1; font: inherit; padding: 6px 9px; border: 1px solid #ddd4c4; border-radius: 7px; background: #fff; }
+.setmeta { color: #8a8272; font-size: 11.5px; margin: 4px 0 10px; line-height: 1.6; }
+.setacts { display: flex; align-items: center; gap: 8px; }
+.setacts button { font: inherit; padding: 5px 14px; border: 1px solid #ddd4c4; border-radius: 8px; background: #fff; cursor: pointer; }
+.setacts button.primary { background: #6b5b45; color: #fff; border-color: #6b5b45; }
+.setstat { font-size: 12px; color: #4b7a5a; }
+.setstat.bad { color: #a0402f; }
+</style>
 </head>
 <body>
 
@@ -341,11 +382,14 @@
     <button id="go">解析</button>
     <button id="zout">−</button>
     <button id="zin">＋</button>
+    <span id="pagemeter" title="当前页 / 总页数：可以直接输入页码跳过去"><input id="pnum" type="text" inputmode="numeric" value="—"><span id="ptot">/ —</span></span>
     <button id="sum" title="只重跑右栏「摘要」那一页：值不值得读 + 三句 TL;DR + 主张 + 术语（会再花一次模型调用）">重跑摘要</button>
     <button id="forget" title="丢掉这篇的本地记录，全部重新生成">重新生成</button>
+    <button id="setbtn" title="模型设置：换厂商 / 换模型 / 换 key">设置</button>
     <span id="stats">原版式 · 段落可点</span>
+    <span id="usage"></span>
   </div>
-  <div id="scroll"><div id="pages"><p class="hint" style="padding:24px">选一篇 PDF，点「解析」。这一版保留论文原版式，段落变成可点的热区。</p></div></div>
+  <div id="scroll"><div id="layoutwarn" hidden></div><div id="pages"><p class="hint" style="padding:24px">选一篇 PDF，点「解析」。这一版保留论文原版式，段落变成可点的热区。</p></div></div>
 </div>
 
 <div id="panel">
@@ -403,13 +447,30 @@
   </div>
 </div>
 
+<!-- 模型设置：换厂商 / 换模型 / 换 key。写 llm.settings.json，改完不用重启 -->
+<div id="setmask" class="setmask"><div class="setbox" role="dialog" aria-label="模型设置">
+  <div class="seth"><b>模型设置</b><span id="setclose" class="setx" title="关闭">✕</span></div>
+  <p class="sethint">默认走 DeepSeek。想换厂商就先选个预设，再按你账号里实际的模型名核对一遍。保存后立刻生效，不用重启。</p>
+  <label class="setrow"><span>预设</span><select id="setpreset"></select></label>
+  <label class="setrow"><span>接口地址</span><input id="setbase" type="text" spellcheck="false" placeholder="https://api.deepseek.com/v1"></label>
+  <label class="setrow"><span>模型名</span><input id="setmodel" type="text" spellcheck="false" placeholder="deepseek-chat"></label>
+  <label class="setrow"><span>API Key</span><input id="setkey" type="password" spellcheck="false" placeholder="留空 = 不修改"></label>
+  <p class="setmeta" id="setmeta"></p>
+  <div class="setacts">
+    <button id="settest">测试连接</button>
+    <button id="setsave" class="primary">保存</button>
+    <span id="setstat" class="setstat"></span>
+  </div>
+</div></div>
+
 <script>
 const $ = (s) => document.querySelector(s);
 const pagesEl = $("#pages");
 const statsEl = $("#stats");
 let state = { paras: [], sizes: {}, zoom: 1, sel: -1, doc: null, fitW: 0, summary: null, drawn: new Set(), obs: null,
   annots: {}, annoTotal: 0, annoDone: 0, annoFail: 0, annoToken: 0,
-  path: "", sha: "", notes: [], asks: [], meta: null, fromCache: false };
+  path: "", sha: "", notes: [], asks: [], meta: null, fromCache: false, layout: null,
+  usage: null, statsBase: "", modelName: "" };
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = "/vendor/pdf.worker.min.js";
 
@@ -489,13 +550,16 @@ function warnBar(msg) {
   warnBar._t = setTimeout(() => el.classList.remove("warnstats"), 8000);
 }
 
-async function saveStore(patch) {
-  if (!state.path) return null;
+async function saveStore(patch, forPath) {
+  // forPath：这篇论文的结果属于哪个文件。异步结果晚到时 state.path 可能已经换成别的论文，
+  // 用当前 state.path 落盘会把 A 篇的摘要写进 B 篇（2026-11-14 真实踩到：NBER 里存着 attention 的摘要）。
+  const target = forPath || state.path;
+  if (!target) return null;
   try {
     const res = await fetch("/api/store", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(Object.assign({ path: state.path }, patch)),
+      body: JSON.stringify(Object.assign({ path: target }, patch)),
     });
     const data = await res.json();
     if (data.error) throw new Error(data.error);
@@ -539,6 +603,78 @@ function normalizeRects(paras) {
   return paras || [];
 }
 
+/* S3 版式诚实：arXiv 单/双栏是回归验证过的版式；三栏及以上、或连标题都没识别到时，
+   在首屏常驻一条提示（不自动消失，直到换下一篇），并注明锚点可能错位。
+   判据只用解析结果本身：段落 col 的最大值 = 该 PDF 出现过的最大栏数；title 段数 = 标题识别情况。 */
+function layoutState(paras) {
+  const n = paras.length;
+  let maxCol = 0, titles = 0, heads = 0;
+  for (const p of paras) {
+    const c = Number(p.col) || 0;
+    if (c > maxCol) maxCol = c;
+    if (p.kind === "title") titles += 1;
+    if (p.kind === "heading") heads += 1;
+  }
+  const cols = n ? maxCol + 1 : 0;
+  if (n === 0) return { verified: false, cols: 0, why: "没有抽取到正文段落（可能是扫描件 / 图片型 PDF）" };
+  if (cols >= 3) return { verified: false, cols: cols, why: "该版式（" + cols + " 栏）未验证" };
+  // 连标题和章节标题都没识别出来，说明这份 PDF 的版式规则基本没对上（不是「标题那一块丢了」）
+  if (n >= 30 && titles === 0 && heads === 0) {
+    return { verified: false, cols: cols, why: "未识别到标题与章节标题，版式可能未被完全识别" };
+  }
+  return { verified: true, cols: cols, why: "" };
+}
+
+function showLayoutWarn(paras) {
+  const el = document.querySelector("#layoutwarn");
+  const st = layoutState(paras || []);
+  state.layout = st;
+  if (!el) return st;
+  if (st.verified) { el.hidden = true; el.innerHTML = ""; return st; }
+  el.hidden = false;
+  el.innerHTML = "<b>⚠ " + escapeHtml(st.why) + "</b>：段落锚点按「栏」重排，个别段落可能错位。" +
+    "arXiv 单/双栏版式已回归验证；三栏期刊 / 杂志排版 / 代码附录 / 扫描件不保证——这是公开承认的已知限制。";
+  return st;
+}
+
+/* ---------- 成本/篇：页脚要写明耗时、成本、tokens、模型名、版式是否已验证 ---------- */
+/* 一次摘要可能就是 1 次调用、也可能分块读十几次，批注还是每 4 段一批：
+   所以这里把每次调用的 usage 累加起来，成本用后端按官网牌价算好的 cost_usd（美元）。 */
+function usageAdd(meta) {
+  const c = (meta && meta.cost) || null;
+  const tok = c ? Number(c.tokens) || 0 : Number((meta && meta.usage || {}).total_tokens) || 0;
+  if (!tok && !c) return;
+  const cur = state.usage || (state.usage = { tokens: 0, usd: 0, model: "", unpriced: false });
+  cur.tokens += tok;
+  if (c) {
+    if (c.cost_usd === null || c.cost_usd === undefined) cur.unpriced = true;
+    else cur.usd = Number(cur.usd || 0) + (Number(c.cost_usd) || 0);
+    if (c.model) cur.model = c.model;
+  }
+  refreshStats();
+}
+
+function fmtTokens(n) {
+  return n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(n);
+}
+
+function usageText() {
+  const u = state.usage;
+  if (!u || !u.tokens) return "";
+  const head = "模型 " + escapeHtml(u.model || state.modelName || "默认模型") + " · tokens " + fmtTokens(u.tokens);
+  // 没有牌价的模型（换了厂商/自带模型）不要瞎算：显示「未估算」
+  return head + (u.unpriced || u.usd === null ? " · 成本 未估算" : " · 成本 ≈$" + Number(u.usd || 0).toFixed(4));
+}
+
+/* 状态行 = 基础信息（段数/耗时/版式，解析时写入）+ 累计用量（摘要与批注陆续到达时补上） */
+function refreshStats() {
+  const t = usageText();
+  const el = $("#usage");
+  if (el) { el.textContent = t; el.style.display = t ? "" : "none"; }
+  if (!state.statsBase) return;
+  statsEl.textContent = state.statsBase;
+}
+
 async function run() {
   const path = $("#pick").value;
   if (!path) return;
@@ -579,6 +715,8 @@ async function run() {
   const parseMs = Math.round(performance.now() - t0);
 
   state.paras = normalizeRects(data.paras);
+  state.parseVersion = data.parse_version || null;   // 状态行显示「解析 v10」，用来区分缓存/新解析
+  showLayoutWarn(state.paras);
   state.sizes = data.page_sizes;
   state.sel = -1;
 
@@ -596,6 +734,8 @@ async function run() {
 async function restoreBundle(b) {
   const parse = b.parse || {};
   state.paras = normalizeRects(parse.paras || []);
+  state.parseVersion = parse.parse_version || null;
+  showLayoutWarn(state.paras);
   state.sizes = parse.page_sizes || {};
   state.sel = -1;
   state.fromCache = true;
@@ -613,6 +753,8 @@ async function restoreBundle(b) {
 
   // 摘要 + 批注 + 体检：直接用存下来的，不再调模型
   if (state.summary) renderSummary(state.summary, b.summary_meta || { model: "本地缓存", ms: 0, mode: "single", chars: 0 });
+  // 体检卡也要回放：以前只在下一次 reproCheck 时才有内容，缓存命中就一直是空的（还会残留上一篇的卡）
+  if (b.repro && b.repro.card) renderRepro(b.repro.card, b.repro.meta || { model: "本地缓存", ms: 0 });
   if (Object.keys(state.annots).length) {
     state.annoTotal = Object.keys(state.annots).length;
     state.annoDone = state.annoTotal;
@@ -631,8 +773,12 @@ async function restoreBundle(b) {
   const zhNotes = (b.zhihu && b.zhihu.status === "ok")
     ? ` · 知乎讨论走缓存（${b.zhihu.total || 0} 条，见「知乎」页）`
     : "";
-  statsEl.textContent = `从本地书库恢复：${state.paras.length} 段 · 批注 ${Object.keys(state.annots).length} 段 · 笔记 ${state.notes.length} 条 · 追问 ${state.asks.length} 次` +
+  const lwCache = state.layout ? (state.layout.verified ? "已验证" : "未验证") : "—";
+  state.usage = b.usage || null;      // 书库里存着上次算的总 tokens / 成本
+  state.statsBase = `从本地书库恢复：${state.paras.length} 段 · 批注 ${Object.keys(state.annots).length} 段 · 笔记 ${state.notes.length} 条 · 追问 ${state.asks.length} 次` +
+    ` · 版式 ${lwCache}` + (state.parseVersion ? ` · 解析 v${state.parseVersion}` : "") +
     (missing.length ? ` · 正在补生成：${missing.join(" / ")}` : "（未调用模型）") + zhNotes;
+  refreshStats();
   maybeZhihu();   // 有缓存就直接显示，没有才真去搜；同一篇只搜一次
 }
 
@@ -647,7 +793,11 @@ async function renderPdf(url, npages, parseMs, t1, autoRun) {
   state.zoom = fitWidth(state.sizes["1"] ? state.sizes["1"][0] : 612);
   await paintPages();
   const renderMs = Math.round(performance.now() - t1);
-  statsEl.textContent = `${state.paras.length} 段 · 批注页 ${npages} / 全文 ${doc.numPages} 页 · 解析 ${parseMs} ms · 渲染 ${renderMs} ms`;
+  const lw = state.layout ? (state.layout.verified ? "已验证" : "未验证") : "—";
+  state.usage = null;                       // 换论文：用量清零，等新的摘要/批注回来再累加
+  state.statsBase = `${state.paras.length} 段 · 批注页 ${npages} / 全文 ${doc.numPages} 页 · 解析 ${parseMs} ms · 渲染 ${renderMs} ms · 版式 ${lw}` +
+    (state.parseVersion ? ` · 解析 v${state.parseVersion}` : "");
+  refreshStats();
   state.summary = null;
   state.annots = {};
   const lg = document.querySelector("#legend");
@@ -693,6 +843,36 @@ async function paintPages() {
     }, { root: $("#scroll"), rootMargin: "800px 0px" });
   }
   pagesEl.querySelectorAll(".page").forEach((el) => state.obs.observe(el));
+  setPageTotal(n);
+  updatePageMeter();
+}
+
+/* ---------- 页码显示框：滚动时跟着变，输入页码回车直接跳 ---------- */
+let meterTick = false;
+function setPageTotal(n) {
+  const t = $("#ptot");
+  if (t) t.textContent = "/ " + (n || "—");
+}
+function updatePageMeter() {
+  const inp = $("#pnum");
+  const pages = pagesEl.querySelectorAll(".page");
+  if (!inp || !pages.length) return;
+  const scTop = $("#scroll").getBoundingClientRect().top;
+  let cur = 1;
+  for (const el of pages) {
+    if (el.getBoundingClientRect().top - scTop <= 24) cur = Number(el.dataset.page);
+    else break;
+  }
+  inp.dataset.page = cur;
+  if (document.activeElement !== inp) inp.value = cur;
+}
+function gotoPage(pno) {
+  const n = state.doc ? state.doc.numPages : 0;
+  const p = Math.max(1, Math.min(n || 1, parseInt(pno, 10) || 1));
+  const el = pagesEl.querySelector('.page[data-page="' + p + '"]');
+  if (el) el.scrollIntoView({ block: "start" });
+  const inp = $("#pnum");
+  if (inp) inp.value = p;
 }
 
 async function drawPage(pno) {
@@ -730,7 +910,7 @@ async function drawPage(pno) {
 }
 
 /* ---------- 点段落 ---------- */
-const KIND_CN = { body: "正文", heading: "小标题", caption: "图注 / 表注", title: "标题" };
+const KIND_CN = { body: "正文", heading: "小标题", caption: "图注 / 表注", title: "标题", code: "代码" };
 const DEBUG = /[?&]debug=1\b/.test(location.search);   // 锚点 JSON 只在 ?debug=1 时露出来
 
 function select(i) {
@@ -760,7 +940,7 @@ function select(i) {
     ${renderNotes(i)}
     <details class="srcbox" ${hasNote ? "" : "open"}>
       <summary>原文 · ${p.chars} 字符</summary>
-      <div class="text">${escapeHtml(p.text)}</div>
+      <div class="text${p.kind === "code" ? " code" : ""}">${escapeHtml(p.text)}</div>
     </details>
     ${DEBUG ? `<p class="hint" style="margin:12px 0 4px">锚点（调试用）</p><pre class="anchor">${JSON.stringify(p.anchor, null, 2)}</pre>` : ""}`;
 
@@ -1288,7 +1468,8 @@ async function annotateAll() {
         if (data.error) throw new Error(data.error);
         (data.items || []).forEach((it) => { state.annots[it.idx] = it; });
         state.annoDone += batch.length;
-        if (token === state.annoToken) saveStore({ annots: data.items || [] });
+        usageAdd(data.meta);     // 每批 4 段：成本和 tokens 累加进页脚
+        if (token === state.annoToken) saveStore({ annots: data.items || [], usage: state.usage });
       } catch (err) {
         state.annoFail += batch.length;
       }
@@ -1358,9 +1539,11 @@ async function summarize() {
       card.innerHTML = '<div class="sumhead"><span class="badge no">失败</span></div><p class="err">' + escapeHtml(data.error) + "</p>";
       return;
     }
+    if (state.path !== path) return;   // 等结果时用户换论文了：别画到新论文上，也别存进新论文
     state.summary = data.summary;
     renderSummary(data.summary, data.meta);
-    saveStore({ summary: data.summary, summary_meta: data.meta });   // 落盘：下次打开不再花钱
+    usageAdd(data.meta);   // 页脚的成本/tokens 从这里开始累加
+    saveStore({ summary: data.summary, summary_meta: data.meta, usage: state.usage }, path);   // 落盘：下次打开不再花钱
     if (rerun) zhihuFetch(true); else maybeZhihu();   // 摘要出炉就能挑术语了，不必等逐段批注
     if (state.sel >= 0) select(state.sel);   // 已经选中某段时，把它的批注补上
   } catch (err) {
@@ -1448,8 +1631,9 @@ async function reproCheck() {
     });
     const data = await res.json();
     if (data.error) throw new Error(data.error);
+    if (state.path !== path) return;   // 换论文了：这篇的体检结果不属于当前页
     renderRepro(data.card, data.meta);
-    saveStore({ repro: { card: data.card, meta: data.meta } });
+    saveStore({ repro: { card: data.card, meta: data.meta } }, path);
   } catch (err) {
     card.innerHTML = `<div class="rep"><div class="rh"><b>值不值得动手</b><span style="font-size:12px;color:#a0402f">${escapeHtml(String(err.message || err))}</span></div></div>`;
   }
@@ -1566,6 +1750,7 @@ function maybeZhihu() {
 
 $("#sum").addEventListener("click", summarize);
 $("#forget").addEventListener("click", async () => {
+  const path = state.path || $("#pick").value;   // 曾经这里引用了已删除的全局 path，按钮点了没反应
   if (!path) return;
   if (!window.confirm("丢掉这篇的本地记录（含我的批注与追问记录）并全部重新生成？")) return;
   try {
@@ -1592,6 +1777,17 @@ pagesEl.addEventListener("click", (e) => {
   if (hit) select(Number(hit.dataset.i));
 });
 
+// 页码框：滚动时更新当前页，输入页码回车跳转
+$("#scroll").addEventListener("scroll", () => {
+  if (meterTick) return;
+  meterTick = true;
+  requestAnimationFrame(() => { meterTick = false; updatePageMeter(); });
+}, { passive: true });
+$("#pnum").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { gotoPage(e.target.value); e.target.blur(); }
+});
+$("#pnum").addEventListener("blur", () => updatePageMeter());
+
 /* ---------- 缩放 ---------- */
 async function zoomBy(k) {
   if (!state.doc) return;
@@ -1607,6 +1803,120 @@ $("#go").onclick = run;
 $("#zin").onclick = () => zoomBy(1.15);
 $("#zout").onclick = () => zoomBy(1 / 1.15);
 window.addEventListener("resize", () => {});
+
+/* ---------- 模型设置（换厂商 / 换模型 / 换 key） ---------- */
+// 预设只填「地址 + 模型名」，key 要用户自己填（本地 Ollama 随便填个非空串）。
+// 模型名会随时间变，所以选完预设仍旧可以手改；填错按报错信息改回你账号里实际的模型名。
+const PRESETS = [
+  { id: "deepseek-chat", name: "DeepSeek · deepseek-chat（默认）", base: "https://api.deepseek.com/v1", model: "deepseek-chat" },
+  { id: "deepseek-flash", name: "DeepSeek · deepseek-flash（便宜）", base: "https://api.deepseek.com/v1", model: "deepseek-flash" },
+  { id: "openai", name: "OpenAI（gpt-4o-mini）", base: "https://api.openai.com/v1", model: "gpt-4o-mini" },
+  { id: "qwen", name: "通义千问 · 兼容模式（qwen-plus）", base: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen-plus" },
+  { id: "ollama", name: "本地 Ollama（qwen2.5:7b，key 随便填）", base: "http://127.0.0.1:11434/v1", model: "qwen2.5:7b" },
+  { id: "custom", name: "自定义…", base: "", model: "" },
+];
+
+function renderPresets(curBase, curModel) {
+  const sel = $("#setpreset");
+  sel.innerHTML = "";
+  let matched = "custom";
+  if (curBase && curModel) {
+    const hit = PRESETS.find((p) => p.base === curBase && p.model === curModel);
+    if (hit) matched = hit.id;
+  }
+  PRESETS.forEach((p) => {
+    const o = document.createElement("option");
+    o.value = p.id;
+    o.textContent = p.name;
+    sel.appendChild(o);
+  });
+  sel.value = matched;
+  return matched;
+}
+
+function applyPreset(id) {
+  const p = PRESETS.find((x) => x.id === id);
+  if (!p || id === "custom") return;              // 自定义：不动输入框，让用户自己写
+  $("#setbase").value = p.base;
+  $("#setmodel").value = p.model;
+  if (id === "ollama") {
+    // 本地模型没有真 key，但我们代码要求非空。只给提示，不自动填 ——
+    // 自动填会在切回别的预设时留下一把假 key，很难察觉。
+    const k = $("#setkey");
+    k.placeholder = "本地模型随便填，比如 ollama";
+    $("#setstat").textContent = "本地 Ollama 不需要真 key，随便填一个非空字符串即可";
+  }
+}
+
+async function openSettings() {
+  const box = $("#setmask");
+  box.classList.add("on");
+  $("#setstat").textContent = "";
+  $("#setstat").className = "setstat";
+  try {
+    const r = await fetch("/api/settings");
+    const s = await r.json();
+    $("#setbase").value = s.base || "";
+    $("#setmodel").value = s.model || "";
+    $("#setkey").value = "";
+    $("#setkey").type = "password";
+    $("#setkey").placeholder = s.key_set ? "已配置 " + (s.key_masked || "") + "，留空 = 不修改" : "必填（sk-...）";
+    renderPresets(s.base || "", s.model || "");
+    state.modelName = s.model || "";
+    const src = { settings: "界面里设的", env: "取自 .env", default: "默认值" };
+    $("#setmeta").innerHTML =
+      "当前生效：<b>" + escapeHtml(s.model || "") + "</b> @ " + escapeHtml(s.base || "") +
+      "（模型" + (src[s.model_source] || "") + " · 地址" + (src[s.base_source] || "") +
+      " · 密钥" + (src[s.key_source] || "") + "）" +
+      (s.priced ? "" : "<br>该模型没有内置牌价 → 页脚成本会显示「未估算」");
+  } catch (err) {
+    $("#setstat").textContent = "读取设置失败：" + String(err.message || err);
+    $("#setstat").className = "setstat bad";
+  }
+}
+
+function closeSettings() { $("#setmask").classList.remove("on"); }
+
+async function saveSettings() {
+  const body = { base: $("#setbase").value, model: $("#setmodel").value };
+  const k = $("#setkey").value.trim();
+  if (k) body.key = k;
+  $("#setstat").textContent = "保存中…";
+  $("#setstat").className = "setstat";
+  try {
+    const r = await fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const s = await r.json();
+    if (s.error) throw new Error(s.error);
+    state.modelName = s.model || "";
+    $("#setkey").value = "";
+    $("#setkey").placeholder = s.key_set ? "已配置 " + (s.key_masked || "") + "，留空 = 不修改" : "必填（sk-...）";
+    $("#setstat").textContent = "已保存，新请求立即用新配置";
+  } catch (err) {
+    $("#setstat").textContent = "保存失败：" + String(err.message || err);
+    $("#setstat").className = "setstat bad";
+  }
+}
+
+async function testSettings() {
+  $("#setstat").textContent = "正在发一个几 token 的请求…";
+  $("#setstat").className = "setstat";
+  try {
+    const r = await fetch("/api/settings/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || "连接失败");
+    $("#setstat").textContent = "连接正常 · " + d.model + " · " + d.ms + " ms · 回复「" + (d.reply || "") + "」";
+  } catch (err) {
+    $("#setstat").textContent = "连接失败：" + String(err.message || err);
+    $("#setstat").className = "setstat bad";
+  }
+}
+
+$("#setbtn").onclick = openSettings;
+$("#setpreset").onchange = (e) => applyPreset(e.target.value);
+$("#setclose").onclick = closeSettings;
+$("#setmask").addEventListener("click", (e) => { if (e.target.id === "setmask") closeSettings(); });
+$("#setsave").onclick = saveSettings;
+$("#settest").onclick = testSettings;
 
 loadList();
 bindDrop();
