@@ -37,3 +37,6 @@ nul
 # 一律不进公开仓库。以后要写公开说明请新建 README.md（下面单独放行）。
 /*.md
 !/README.md
+
+# 界面里保存的模型配置（可能含 key，绝不进仓库）
+/settings.json

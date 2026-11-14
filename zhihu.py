@@ -301,12 +301,6 @@ def build_card(bundle, refresh=False):
     }, False
 
 
-def card_for(bundle, refresh=False):
-    """server 用：算完顺手把「不回退的失败」也存下来（nokey/auth 这种下次还是要重算）。"""
-    card, cached = build_card(bundle, refresh=refresh)
-    return card, cached
-
-
 def quota_hint():
     """给 /api/health 用：一句话说清知乎这块现在能不能用。"""
     if not has_secret():

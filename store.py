@@ -88,7 +88,7 @@ def delete(sha):
 def merge(sha, patch, path=None):
     """增量写入：解析 / 摘要 / 批注 / 体检 / 笔记 / 追问分批到达，每次都并进同一个文件。"""
     data = load(sha) or {"sha": sha, "notes": [], "asks": [], "annots": {}}
-    for k in ("parse", "summary", "summary_meta", "repro", "zhihu", "file", "size"):
+    for k in ("parse", "summary", "summary_meta", "repro", "zhihu", "usage", "file", "size"):
         if k in patch and patch[k] is not None:
             data[k] = patch[k]
     if path:

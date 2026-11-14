@@ -170,7 +170,7 @@ def open_paper(payload):
     # 解析规则升级过（PARSE_VERSION 变了）：旧的段落编号、分段、分类都不可信，
     # 派生结果（摘要/批注/体检）也就对不上了 —— 丢掉重跑，别让老结果糊在新解析上。
     if (data["parse"] or {}).get("parse_version") != m1_parse.PARSE_VERSION:
-        for k in ("parse", "summary", "summary_meta", "annots", "repro", "zhihu"):
+        for k in ("parse", "summary", "summary_meta", "annots", "repro", "zhihu", "usage"):
             data.pop(k, None)
         with _STORE_LOCK:
             store.save(sha, data)
@@ -185,7 +185,7 @@ def save_paper(payload):
     """前端每跑完一段（解析 / 摘要 / 批注 / 体检）就把结果并进本地书库。"""
     sha, full, rel = paper_sha(payload)
     patch = {k: payload.get(k) for k in
-             ("parse", "summary", "summary_meta", "repro", "annots", "note", "del_note", "ask") if k in payload}
+             ("parse", "summary", "summary_meta", "repro", "annots", "note", "del_note", "ask", "usage") if k in payload}
     patch["file"] = os.path.basename(full)
     patch["size"] = os.path.getsize(full)
     with _STORE_LOCK:
@@ -259,6 +259,9 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", MIME.get(ext, "application/octet-stream"))
         self.send_header("Content-Length", str(len(body)))
+        # 页面和脚本每次都取最新的：改了 reader.html 之后，浏览器若拿缓存，
+        # 会继续用旧 JS 渲染——明明是新的解析结果，看起来却像「老版」。
+        self.send_header("Cache-Control", "no-store, must-revalidate")
         self.end_headers()
         self.wfile.write(body)
 
@@ -277,6 +280,8 @@ class Handler(SimpleHTTPRequestHandler):
             })
         if path == "/api/papers":
             return self.send_json({"papers": list_papers()})
+        if path == "/api/settings":           # 设置面板：当前模型/地址/密钥（打码）+ 来源
+            return self.send_json(llm.settings_info())
         if path == "/api/library":            # 本地书库索引：哪些论文已经有批注/笔记
             return self.send_json({"library": store.library()})
         if path.startswith("/api/"):
@@ -334,11 +339,17 @@ class Handler(SimpleHTTPRequestHandler):
         if route == "/api/upload":            # 拖进来的 PDF：原始字节直传，存 papers/imported/
             return self.handle_upload()
         if route not in ("/api/parse", "/api/jump1", "/api/annotate", "/api/ask", "/api/repro",
-                         "/api/open", "/api/store", "/api/forget", "/api/zhihu"):
+                         "/api/open", "/api/store", "/api/forget", "/api/zhihu",
+                         "/api/settings", "/api/settings/test"):
             return self.send_json({"error": "unknown api"}, 404)
         try:
             n = int(self.headers.get("Content-Length") or 0)
             payload = json.loads(self.rfile.read(n).decode("utf-8") or "{}")
+            if route == "/api/settings":       # 保存模型配置（写 settings.json，不重启即生效）
+                llm.save_settings(payload)
+                return self.send_json(llm.settings_info())
+            if route == "/api/settings/test":  # 测试连接：发一个几 token 的请求
+                return self.send_json(llm.test_connection())
             if route == "/api/parse":
                 return self.send_json(parse_cached(payload))
             if route == "/api/zhihu":           # 知乎讨论卡（站内搜索 API，结果进书库缓存）

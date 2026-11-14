@@ -23,8 +23,81 @@ import urllib.request
 DEFAULT_BASE = "https://api.deepseek.com/v1"
 DEFAULT_MODEL = "deepseek-chat"
 
+# 用户在界面上改的配置落在项目根目录的 settings.json（不进 git，见 .gitignore）。
+# 优先级：settings.json > .env / 环境变量 > 默认值。
+SETTINGS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")
+_SETTINGS = None
+
 WORTH = ("值得精读", "扫结论即可", "与你不相关")
 STRENGTH = ("强", "中", "弱")
+
+# ---------------------------------------------------------------- 成本估算
+# 牌价来源：https://api-docs.deepseek.com/quick_start/pricing（2026-11-14 抓取）。
+# 单位：美元 / 1M tokens。本项目的 LLM_MODEL 是旧模型名 deepseek-chat，现由 Flash 承接，
+# 所以按 Flash 牌价估算；以后换模型只改这张表，别在别处硬编码价格。
+PRICES = {
+    "flash": {"peak": {"hit": 0.006, "miss": 0.30, "out": 1.20},
+              "offpeak": {"hit": 0.003, "miss": 0.15, "out": 0.60}},
+}
+
+# 模型名 → PRICES 里的档位。没有牌价的模型（换厂商、自带模型）返回 None，
+# 前端显示「未估算」，绝不拿别人的价格瞎算。
+PRICE_BY_MODEL = {
+    "deepseek-chat": "flash",
+    "deepseek-flash": "flash",
+}
+
+
+def price_key(model):
+    return PRICE_BY_MODEL.get((model or "").strip().lower())
+
+
+def is_peak(ts=None):
+    """官网口径：UTC 周一至周五 01:00-04:00、06:00-10:00 为峰时，其余（含周末）低谷。"""
+    t = time.gmtime(time.time() if ts is None else ts)
+    if t.tm_wday >= 5:
+        return False
+    return 1 <= t.tm_hour < 4 or 6 <= t.tm_hour < 10
+
+
+def merge_usage(total, usage):
+    """把多次调用的 usage 累加成一个（成本要按总量算，不能每次各自四舍五入）。"""
+    out = dict(total or {})
+    for k in ("prompt_tokens", "completion_tokens", "total_tokens",
+              "prompt_cache_hit_tokens", "prompt_cache_miss_tokens"):
+        out[k] = int(out.get(k) or 0) + int((usage or {}).get(k) or 0)
+    return out
+
+
+def cost_usd(usage, model=None, ts=None):
+    """按牌价算一次（或累计）调用的美元成本。缓存命中与未命中分开计价。
+    没有牌价的模型返回 None（前端显示「未估算」），不要拿别的模型的价格硬算。"""
+    pk = price_key(model or config()["model"])
+    if not pk:
+        return None
+    u = usage or {}
+    hit = int(u.get("prompt_cache_hit_tokens") or 0)
+    miss = int(u.get("prompt_cache_miss_tokens") or 0)
+    if not (hit or miss):
+        miss = int(u.get("prompt_tokens") or 0)
+    out = int(u.get("completion_tokens") or 0)
+    p = PRICES[pk]["peak" if is_peak(ts) else "offpeak"]
+    return round((hit * p["hit"] + miss * p["miss"] + out * p["out"]) / 1000000.0, 6)
+
+
+def usage_info(usage, model=None, ts=None):
+    """给前端用的「用量 + 成本」摘要（页脚要显示 tokens / 成本每篇）。"""
+    u = usage or {}
+    return {
+        "model": model or config()["model"],
+        "prompt_tokens": int(u.get("prompt_tokens") or 0),
+        "completion_tokens": int(u.get("completion_tokens") or 0),
+        "cache_hit_tokens": int(u.get("prompt_cache_hit_tokens") or 0),
+        "cache_miss_tokens": int(u.get("prompt_cache_miss_tokens") or 0),
+        "tokens": int(u.get("total_tokens") or 0),
+        "cost_usd": cost_usd(u, model, ts),
+        "peak": is_peak(ts),
+    }
 
 
 def _load_dotenv():
@@ -46,18 +119,107 @@ def _load_dotenv():
         pass
 
 
+def _settings():
+    """读 settings.json（界面里存的那份）。坏文件就当没有，不能让配置坏了开不了机。"""
+    global _SETTINGS
+    if _SETTINGS is None:
+        try:
+            with open(SETTINGS_PATH, encoding="utf-8") as f:
+                _SETTINGS = json.load(f) or {}
+        except (OSError, ValueError):
+            _SETTINGS = {}
+    return _SETTINGS
+
+
+def save_settings(patch):
+    """合并保存（只认 base/model/key 三个键，且空字符串=删掉这项、回退到 .env）。"""
+    global _SETTINGS
+    cur = dict(_settings())
+    for k in ("base", "model", "key"):
+        if k in patch:
+            v = str(patch.get(k) or "").strip()
+            if k == "base" and v:            # 有人会把整条 URL 粘进来，这里顺手清掉尾巴
+                v = v.rstrip("/")
+                for tail in ("/chat/completions", "/completions"):
+                    if v.endswith(tail):
+                        v = v[: -len(tail)].rstrip("/")
+            if v:
+                cur[k] = v
+            else:
+                cur.pop(k, None)
+    _SETTINGS = cur
+    tmp = SETTINGS_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(cur, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, SETTINGS_PATH)
+    return cur
+
+
+def mask_key(k):
+    k = k or ""
+    if len(k) <= 10:
+        return "***" if k else ""
+    return k[:6] + "…" + k[-4:]
+
+
+def settings_info():
+    """给设置面板用的现状：当前生效值 + 来源（settings / env / default）+ 打码的 key。"""
+    s = _settings()
+    cfg = config()
+    _load_dotenv()
+    env_key = os.environ.get("LLM_API_KEY") or os.environ.get("DEEPSEEK_API_KEY") or ""
+
+    def src(field, envname):
+        if s.get(field):
+            return "settings"
+        return "env" if os.environ.get(envname) else "default"
+
+    return {
+        "base": cfg["base"],
+        "model": cfg["model"],
+        "key_set": bool(cfg["key"]),
+        "key_masked": mask_key(cfg["key"]),
+        "base_source": src("base", "LLM_BASE_URL"),
+        "model_source": src("model", "LLM_MODEL"),
+        "key_source": "settings" if s.get("key") else ("env" if env_key else "default"),
+        "priced": bool(price_key(cfg["model"])),
+        "settings_path": SETTINGS_PATH,
+    }
+
+
 def config():
     _load_dotenv()
-    key = os.environ.get("LLM_API_KEY") or os.environ.get("DEEPSEEK_API_KEY") or ""
+    s = _settings()
+    key = s.get("key") or os.environ.get("LLM_API_KEY") or os.environ.get("DEEPSEEK_API_KEY") or ""
     return {
-        "base": (os.environ.get("LLM_BASE_URL") or DEFAULT_BASE).rstrip("/"),
+        "base": (s.get("base") or os.environ.get("LLM_BASE_URL") or DEFAULT_BASE).rstrip("/"),
         "key": key,
-        "model": os.environ.get("LLM_MODEL") or DEFAULT_MODEL,
+        "model": s.get("model") or os.environ.get("LLM_MODEL") or DEFAULT_MODEL,
     }
 
 
 def has_key():
     return bool(config()["key"])
+
+
+def test_connection():
+    """设置面板的「测试连接」：发一个 1 token 的小请求，确认 base/model/key 能用。
+    不花正经额度（几十个 token），失败把可读原因回给前端。"""
+    t0 = time.time()
+    try:
+        text, usage = chat([{"role": "user", "content": "ping，只回一个字：pong"}],
+                           temperature=0, max_tokens=8, timeout=30, json_mode=False)
+    except RuntimeError as exc:
+        return {"ok": False, "error": str(exc), "ms": int((time.time() - t0) * 1000)}
+    cfg = config()
+    return {
+        "ok": True,
+        "ms": int((time.time() - t0) * 1000),
+        "model": cfg["model"],
+        "base": cfg["base"],
+        "reply": (text or "").strip()[:40],
+        "usage": usage_info(usage, cfg["model"]),
+    }
 
 
 # ---------------------------------------------------------------- HTTP
@@ -68,8 +230,8 @@ def chat(messages, temperature=0.3, max_tokens=2400, timeout=120, json_mode=True
     cfg = config()
     if not cfg["key"]:
         raise RuntimeError(
-            r"没有配置 API key：请在 D:\Projects\PaperPrism\.env 里写一行 "
-            "DEEPSEEK_API_KEY=sk-...（或设置同名环境变量），然后重启 server.py"
+            r"没有配置 API key：点右上角「设置」填进去（或写 .env 的一行 "
+            "DEEPSEEK_API_KEY=sk-...）"
         )
     body = {
         "model": cfg["model"],
@@ -407,7 +569,7 @@ def _map_notes(parsed, budget):
             short.append(dict(p, text=p["text"][:240]))
         chunks = _chunk(short, MAP_CHUNK)[:MAP_MAX_CHUNKS]
 
-    notes, used_tokens = [], 0
+    notes, used_tokens, all_usage = [], 0, {}
     for i, lines in enumerate(chunks, 1):
         body = "\n".join(lines)
         user = (
@@ -426,6 +588,7 @@ def _map_notes(parsed, budget):
                               "numbers": [], "terms": [], "failed": True})
                 continue
         used_tokens += int((usage or {}).get("total_tokens") or 0)
+        all_usage = merge_usage(all_usage, usage)
         pts = raw.get("points") if isinstance(raw, dict) else None
         notes.append({
             "part": i,
@@ -434,7 +597,7 @@ def _map_notes(parsed, budget):
             "numbers": (raw.get("numbers") or [])[:10] if isinstance(raw, dict) else [],
             "terms": (raw.get("terms") or [])[:12] if isinstance(raw, dict) else [],
         })
-    return notes, used_tokens
+    return notes, used_tokens, all_usage
 
 
 def build_reduce_messages(parsed, notes):
@@ -478,9 +641,9 @@ def jump1(parsed):
     t0 = time.time()
     budget = budget_for(parsed)
     total = sum(len(p["text"]) + 8 for p in parsed["paras"] if p["kind"] != "title")
-    mode, chunks, map_tokens = "single", 0, 0
+    mode, chunks, map_tokens, map_usage = "single", 0, 0, {}
     if total > budget:
-        notes, map_tokens = _map_notes(parsed, budget)
+        notes, map_tokens, map_usage = _map_notes(parsed, budget)
         messages = build_reduce_messages(parsed, notes)
         mode, chars, chunks = "map-reduce", len(messages[1]["content"]), len(notes)
     else:
@@ -501,8 +664,11 @@ def jump1(parsed):
                     "chunks": chunks,
                     "attempt": attempt + 1,
                     "usage": usage,
+                    "map_usage": map_usage,
                     "map_tokens": map_tokens,
                     "model": config()["model"],
+                    # 成本按「分块 + 汇总」的总量算（map-reduce 时只算 reduce 会严重低估）
+                    "cost": usage_info(merge_usage(usage, map_usage), config()["model"]),
                 }
             last_err = ValueError("模型输出缺少必要字段（tl_dr / claims / glossary）")
         except Exception as exc:  # 网络、JSON、校验都在这
@@ -598,6 +764,7 @@ def annotate_batch(parsed, idxs, timeout=120):
         "usage": usage or {},
         "asked": len(idxs),
         "got": len(out),
+        "cost": usage_info(usage, config()["model"]),
     }
     return out, meta
 
@@ -685,5 +852,6 @@ def ask(parsed, question, idx=None, summary=None, timeout=120):
     return {
         "answer": (text or "").strip(),
         "used": used,
-        "meta": {"ms": int((_t.time() - t0) * 1000), "usage": usage or {}, "retrieved": picked},
+        "meta": {"ms": int((_t.time() - t0) * 1000), "usage": usage or {},
+                 "retrieved": picked, "cost": usage_info(usage, config()["model"])},
     }
