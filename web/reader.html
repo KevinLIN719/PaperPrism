@@ -1006,7 +1006,9 @@ async function revealPara(i) {
 }
 
 function escapeHtml(s) {
-  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  // 兜底：历史缓存里有个别字段被写成了对象/数字，直接 .replace 会炸掉整页渲染。
+  const str = (s == null) ? "" : (typeof s === "string" ? s : String(s));
+  return str.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
 /* ---------- 右侧标签页 ---------- */

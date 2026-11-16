@@ -1035,19 +1035,19 @@ def annotate_batch(parsed, idxs, timeout=120):
         sec_i = _heading_ctx(paras, i)
         any_sm = False
         picked = {}  # canon -> term dict（同段同一词的两种写法只留一条）
-        for t in (it.get("terms") or [])[:3]:
+        for t in (it.get("terms") or [])[:5]:
             if isinstance(t, dict) and t.get("t"):
                 tt = _s(t.get("t"), 40)
                 sm = bool(t.get("selfmade")) and (
                     not SELF_MADE_GUARD or term_selfmade_ok(text_i, tt, sec_i))
                 any_sm = any_sm or sm
-                one = {"t": tt, "zh": _s(t.get("zh"), 40),
-                       "selfmade": sm,
-                       "why": _s(t.get("why"), 40) if sm else ""}
+                tobj = {"t": tt, "zh": _s(t.get("zh"), 40),
+                        "selfmade": sm,
+                        "why": _s(t.get("why"), 40) if sm else ""}
                 key = _canon_term(tt)
                 old = picked.get(key)
                 if old is None or (sm and not old["selfmade"]):
-                    picked[key] = one
+                    picked[key] = tobj
         terms = list(picked.values())
         role = _s(it.get("role"), 8).strip()
         if role not in ROLES:
