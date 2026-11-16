@@ -796,10 +796,8 @@ async function renderPdf(url, npages, parseMs, t1, autoRun) {
   state.zoom = fitWidth(state.sizes["1"] ? state.sizes["1"][0] : 612);
   await paintPages();
   const renderMs = Math.round(performance.now() - t1);
-  const lw = state.layout ? (state.layout.verified ? "已验证" : "未验证") : "—";
   state.usage = null;                       // 换论文：用量清零，等新的摘要/批注回来再累加
-  state.statsBase = `${state.paras.length} 段 · 批注页 ${npages} / 全文 ${doc.numPages} 页 · 解析 ${parseMs} ms · 渲染 ${renderMs} ms · 版式 ${lw}` +
-    (state.parseVersion ? ` · 解析 v${state.parseVersion}` : "");
+  state.statsBase = "实时解析 · 摘要生成中…";   // 摘要回来后改成「实时解析生成」
   refreshStats();
   state.summary = null;
   state.annots = {};
@@ -1551,6 +1549,11 @@ async function summarize() {
     if (state.path !== path) return;   // 等结果时用户换论文了：别画到新论文上，也别存进新论文
     state.summary = data.summary;
     renderSummary(data.summary, data.meta);
+    // 顶栏只说一句「实时解析生成」；耗时/成本靠摘要卡与右上角的 tokens/成本行
+    if (!state.statsBase.startsWith("从本地书库恢复")) {
+      state.statsBase = "实时解析生成";
+      refreshStats();
+    }
     usageAdd(data.meta);   // 页脚的成本/tokens 从这里开始累加
     saveStore({ summary: data.summary, summary_meta: data.meta, usage: state.usage }, path);   // 落盘：下次打开不再花钱
     if (rerun) zhihuFetch(true); else maybeZhihu();   // 摘要出炉就能挑术语了，不必等逐段批注
