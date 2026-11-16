@@ -702,13 +702,19 @@ role 的判断标准（务必区分，不要全填一个）：
 要求：
 - 每段都要有一条，idx 用我给的 [#编号]，不要改。
 - one_line 要具体：出现数字/结论就把数字写进去，禁止“介绍了背景”这种废话。
-- terms 每段 0–3 个，只挑读者可能不认识的专业词。
+- terms 每段 0–5 个，只挑读者可能不认识的专业词。
+- **优先挑本段真正被命名的专名**：段首「术语.」这种写法给出的术语、专名后面跟括号缩写的
+  （如 residual nets (ResNets)、RAX (Robot Agent eXploration)）、被 we modify/call/term/define 直接指向的名词短语；
+  building block、module、network、framework 这类泛化词不要列（它们不是本文的命名）。
 
 selfmade 的判定（重要，按四步走，不要凭“这段里有自创词”就写 true）：
 1) 先在这一段里找**命名/定义动作**：we propose / introduce / present / call / term / name / define、
    “we refer to X as / X is dubbed / we coin”、专名后紧跟括号全称或缩写（如 RAX (Robot Agent eXploration)）、
    或段首「术语.」后紧跟一句定义。找不到 → false。
+   注意：只在定义/计量某个量（counts、measures、is the number of）不算命名；
+   另外我把段落所在的小节标题写进了段落头，标题本身就在命名时，也算本段有命名证据。
 2) 若命名动作发生在**别的段落**（本段只是使用它、复述、或写 “as we discussed in the introduction”）→ false。
+   例外：那个段落的小节标题就是这个词（如 3.2.2 Multi-Head Attention），或本段头标注的小节标题就是这个词。
 3) 若本段在给某词下定义时**带文献标号**（如 [2, 34, 49]、(26)），或出现 familiar from / adopted from /
    following prior work / has been suggested / 行业通行指标 → false（那是沿用的既有概念，不是本文自创）。
 4) 以下一律 false：匿名化代称（hereafter, the “AI firm”）、变量名与分组口径（quintile、high-skill 等）、
@@ -718,11 +724,13 @@ selfmade 的判定（重要，按四步走，不要凭“这段里有自创词�
 正例（应写 true）：
 - “In this work we propose the Transformer, a model architecture eschewing recurrence…”（we propose + 专名）
 - “We introduce RAX (Robot Agent eXploration), an open-source framework…”（专名 + 括号全称）
-- “Budget and scenes. The exploration budget counts exploration episodes.”（段首术语 + 定义句）
+- “We term this procedure rehearsal.”（we term + 专名）
+- “3.2.2 Multi-Head Attention” 这种小节标题本身就是命名——我会在段落开头用小括号标出所在小节。
 反例（应写 false）：
 - “Shortcut connections [2, 34, 49] are those skipping one or more layers.”（带引用标号 = 沿用既有概念）
 - “... provides AI-based customer service support software (hereafter, the “AI firm”)”（匿名化代称）
 - “In this section, we demonstrate how RAX achieves continual learning…”（只是使用，不是定义）
+- “The exploration budget counts exploration episodes.”（实验设置在定义/计量一个量，不是给东西起名字）
 
 terms 里每个词单独给 selfmade（术语级，不要整段一个结论）：
 - 同一段里可能既有既有概念又有本文命名：既有概念写 false，本文命名的写 true。
@@ -736,6 +744,12 @@ terms 里每个词单独给 selfmade（术语级，不要整段一个结论）�
 # 宁可少标（漏掉几条真自创）也不要错标——错标会让读者把作者生造的词当成领域共识。
 SELF_MADE_GUARD = True
 
+# 小节标题是否算「本文命名」的证据。
+# 2026-11-16 第四轮实测：标题规则能捞回 Multi-Head Attention（真 A），但也会把
+# Active Perception / Human–Robot Interaction 这类既有领域名当成自创（章节名是描述还是命名
+# 在版式上无法区分）。默认关闭，宁可漏标。
+HEADING_AS_NAMING = False
+
 _SM_NAMING = re.compile(
     r"(?i)\b(we|this paper|our (?:work|paper|study))\s+(?:hereby\s+)?"
     r"(propose|introduce|present|call|term|name|define|establish|coined|dub)|"
@@ -743,13 +757,63 @@ _SM_NAMING = re.compile(
     r"\bwe\s+(?:modify|re-?design|design|change)\b[^.]{0,60}?\bas\b")
 _SM_DEF = re.compile(
     r"(?i)\b(is|are)\s+defined\s+as\b|\bdefined\s+as\b|\bdenotes?\b|\bwe\s+define\b|"
-    r"\bwe\s+call\b|\bcounts?\b|\bwe\s+measure\b")
+    r"\bwe\s+call\b")
 _SM_LEAD_TERM = re.compile(r"^([A-Z][A-Za-z\-]*(?:\s+[A-Za-z\-]+){0,4})\.\s")
 _SM_ACRO = re.compile(r"\b([A-Z][A-Za-z\-]+(?:\s+[A-Za-z\-]+){0,4})\s*\(([A-Z]{2,}[A-Za-z0-9\-]*)\)")
 _SM_ACRO2 = re.compile(r"\b([A-Z]{2,}[A-Za-z0-9\-]*)\s*\(([A-Z][A-Za-z\-]+(?:\s+[A-Za-z\-]+){1,6})\)")
 _SM_QUOTED = re.compile(r"(?i)\b(call|term|name|dub|refer to)\b[^.]{0,60}[\"“]")
 _SM_ANON = re.compile(r"(?i)hereafter,?\s+the\s+[\"“]")
 _SM_FAMILIAR = re.compile(r"(?i)\b(familiar from|adopted from|borrowed from|following prior work)\b")
+
+# 「我们把它定义为 / 我们称之为 … as」这类明确的下定义句式（比 counts / measures 严）
+_SM_DEFINE_AS = re.compile(
+    r"(?i)\bwe\s+(?:define|call|term|name|refer\s+to)\s+[^.()]{0,80}?\s+as\s|"
+    r"\bwhich\s+we\s+call\b|\bhereafter\s+(?:called|referred\s+to\s+as)\b")
+
+
+_NUM_PREFIX = re.compile(r"^\s*\d+(?:\.\d+)*\.?\s+")
+_SM_STOP = {"the", "a", "an", "of", "for", "in", "on", "and", "to", "self"}
+
+
+def _canon_term(t):
+    """术语归一：去编号 / 连字符 / 复数 / self- 前缀，用于「同一个词的两种写法」合并。
+
+    multi-headed self-attention 与 Multi-Head Attention 归一后都是 multi head attention。
+    """
+    x = _NUM_PREFIX.sub("", (t or "").strip().lower())
+    x = x.replace("-", " ").replace("–", " ").replace("—", " ").replace("_", " ")
+    x = re.sub(r"[^a-z0-9 ]+", " ", x)
+    words = []
+    for w in x.split():
+        if w in _SM_STOP:
+            continue
+        if w == "headed":
+            w = "head"
+        if w.endswith("s") and len(w) > 3 and not w.endswith("ss"):
+            w = w[:-1]
+        words.append(w)
+    return " ".join(words)
+
+
+_GENERIC_TERMS = {
+    "building block", "block", "module", "layer", "network", "model", "framework",
+    "architecture", "feature", "map", "embedding", "attention", "encoder", "decoder",
+    "training", "result", "experiment", "conclusion", "background", "introduction",
+    "related work", "method", "approach", "analysis", "discussion", "setup",
+}
+
+
+def _heading_names(heading, term):
+    """小节标题本身是否就是这个名字（Results 这类泛标题不算）。"""
+    h = _canon_term(heading)
+    c = _canon_term(term)
+    if not h or not c:
+        return False
+    if len(c.split()) < 2 and len(c) < 8:
+        return False
+    if c in _GENERIC_TERMS:
+        return False
+    return c == h or (" " + c + " ") in (" " + h + " ")
 
 
 def selfmade_ok(text):
@@ -763,23 +827,103 @@ def selfmade_ok(text):
         return True
     if _SM_QUOTED.search(t):
         return True
-    # 段首「术语.」+ 同段有定义动词（Budget and scenes. / Rehearsal. 这类自查表写法）
-    return bool(_SM_LEAD_TERM.match(t)) and bool(_SM_DEF.search(t)) and len(t) < 700
+    return strong_definition(t)
 
 
-def strong_definition(text):
-    """自查表式定义段：段首「术语.」+ 同段定义动词（Budget and scenes. X counts ...）。"""
+def strong_definition(text, heading=""):
+    """定义段兜底：本段得有**命名/下定义动作**才算，光是「在计量某个量」不算。
+
+    v3 收紧：删掉了 counts / measures 这类弱判据（Scaling 的 exploration budget 就是被它误命中的），
+    另加第三种证据：段首是「术语.」且本段所在小节标题就是这个术语。
+    """
     t = re.sub(r"\s+", " ", text or "").strip()
-    return bool(_SM_LEAD_TERM.match(t)) and bool(_SM_DEF.search(t)) and len(t) < 700
+    if not t or len(t) >= 700:
+        return False
+    if _SM_NAMING.search(t) or _SM_DEFINE_AS.search(t):
+        return True
+    lead = _SM_LEAD_TERM.match(t)
+    return bool(lead) and bool(heading) and _heading_names(heading, lead.group(1))
 
 
 _CITE_TAIL = re.compile(r"^\s*(?:\[\d|\(\d)")
 
 
-def term_selfmade_ok(text, term):
-    """术语级兜底：这个词在本段里得真被命名，且不是“术语 + 文献标号”的沿用写法。"""
+def _lead_term_def(text, term):
+    """段首就是「术语.」，且紧跟一两句在解释它（附录术语表的写法）。"""
+    t = re.sub(r"\s+", " ", text or "").strip()
+    m = _SM_LEAD_TERM.match(t)
+    if not m:
+        return False
+    if _canon_term(m.group(1)) != _canon_term(term):
+        return False
+    tail = t[m.end():m.end() + 320]
+    return bool(
+        _SM_DEF.search(tail) or _SM_NAMING.search(tail) or _SM_DEFINE_AS.search(tail)
+        or re.search(r"(?i)\b(is|are)\s+(a|an|the)\b", tail)
+        or re.search(r"(?i)\b(means|refers\s+to|consists\s+of|works\s+by)\b", tail)
+        or (re.search(r"(?i)\bwhen\b", tail)
+            and re.search(re.escape(term), tail, re.I))
+        or len(tail.strip()) >= 80
+    )
+
+
+def _acronym_near(text, term, back=120, fwd=120):
+    """术语与括号缩写互证（residual nets (ResNets)、RAX (Robot Agent eXploration)）。"""
+    t = text or ""
+    if not term:
+        return False
+    pat = re.compile(r"\W+".join(re.escape(w) for w in term.split()), re.I)
+    for m in pat.finditer(t):
+        win = t[max(0, m.start() - back):m.end() + fwd]
+        if _SM_ACRO.search(win) or _SM_ACRO2.search(win) or _SM_QUOTED.search(win):
+            return True
+        if re.search(re.escape(term) + r"\s*\([\w-]{2,10}\)", win, re.I):
+            return True
+    return False
+
+
+def _naming_near(text, term, back=200, fwd=80):
+    """命名动作是否就落在这个词附近（整段别处出现 we propose 不算）。"""
+    t = text or ""
+    if not term:
+        return False
+    pat = re.compile(r"\W+".join(re.escape(w) for w in term.split()), re.I)
+    for m in pat.finditer(t):
+        win = t[max(0, m.start() - back):m.end() + fwd]
+        if _SM_NAMING.search(win) or _SM_DEFINE_AS.search(win) or _SM_DEF.search(win):
+            return True
+    return _acronym_near(text, term)
+
+
+def _generic_term(term):
+    """泛化技术词：即使本段有定义动作，也不当成「本文自创」。"""
+    return _canon_term(term) in _GENERIC_TERMS
+
+
+def _familiar_near(text, term, back=200, fwd=120):
+    """术语附近是否明说「沿用前人」（familiar from / adopted from …）。"""
+    t = text or ""
+    if not term:
+        return False
+    pat = re.compile(r"\W+".join(re.escape(w) for w in term.split()), re.I)
+    for m in pat.finditer(t):
+        if _SM_FAMILIAR.search(t[max(0, m.start() - back):m.end() + fwd]):
+            return True
+    return False
+
+
+def term_selfmade_ok(text, term, heading=""):
+    """术语级兜底：这个词在本段里得真被命名，且不是“术语 + 文献标号”的沿用写法。
+
+    heading 是本段所在的小节标题：标题就是这个术语时，等于本文在那一节给它命了名
+    （Attention 的 Multi-Head Attention 就属于这种：正文只说 “we found it beneficial …”）。
+    """
     text = text or ""
-    if not selfmade_ok(text):
+    if _generic_term(term) or _familiar_near(text, term):
+        return False
+    if HEADING_AS_NAMING and bool(heading) and _heading_names(heading, term):
+        return True
+    if not (_naming_near(text, term) or _lead_term_def(text, term)):
         return False
     words = re.findall(r"[A-Za-z]+", (term or "").lower())
     if not words:
@@ -794,6 +938,55 @@ def term_selfmade_ok(text, term):
     return True
 
 
+def dedupe_selfmade_annots(annots):
+    """同一篇里同一个自创术语只保留最早一处（跨段去重）。
+
+    批注是一段一批生成的，模型会在摘要段、贡献段、结论段反复把同一个词标成自创；
+    对读者来说「本文自创」只需要一处标记，落在最早出现的位置最合理。
+    返回 (新 annots, 改动数)。
+    """
+    if not isinstance(annots, dict):
+        return annots, 0
+    seen = {}
+    changed = 0
+    for k in sorted(annots, key=lambda x: int(x)):
+        a = annots.get(k) or {}
+        for t in a.get("terms") or []:
+            if not t.get("selfmade"):
+                continue
+            key = _canon_term(t.get("t"))
+            if not key:
+                continue
+            if key in seen:
+                t["selfmade"] = False
+                t["why"] = ""
+                changed += 1
+            else:
+                seen[key] = k
+        if a.get("terms"):
+            a["selfmade"] = any(t.get("selfmade") for t in a["terms"])
+    return annots, changed
+
+
+def _heading_before(paras, i):
+    """第 i 段所在小节的小标题（往前找最近一个 heading；没有就空串）。"""
+    for j in range(i - 1, -1, -1):
+        p = paras[j]
+        if p.get("kind") == "heading":
+            return p.get("text") or ""
+        if p.get("kind") == "title":
+            return ""
+    return ""
+
+
+def _heading_ctx(paras, i):
+    """本段的「小节标题」上下文；标题段落自己就是命名证据。"""
+    p = paras[i]
+    if p.get("kind") in ("heading", "title"):
+        return p.get("text") or ""
+    return _heading_before(paras, i)
+
+
 def annotate_batch(parsed, idxs, timeout=120):
     """给一批段落写批注（每批 3–4 段，失败重试一次）。"""
     paras = parsed["paras"]
@@ -804,7 +997,11 @@ def annotate_batch(parsed, idxs, timeout=120):
         text = p["text"]
         if len(text) > 900:
             text = text[:900] + "…"
-        blocks.append("[#%d] %s\n%s" % (i, p.get("anchor", {}).get("head", ""), text))
+        sec = _heading_before(paras, i)
+        head = p.get("anchor", {}).get("head", "")
+        if sec:
+            head = "%s（小节：%s）" % (head, sec)
+        blocks.append("[#%d] %s\n%s" % (i, head, text))
     user = "论文标题：%s\n\n下面是这篇论文的 %d 段原文。逐段给批注：\n\n%s\n\n%s" % (
         title, len(idxs), "\n\n".join(blocks), ANNO_HINT
     )
@@ -834,17 +1031,24 @@ def annotate_batch(parsed, idxs, timeout=120):
         one = _s(it.get("one_line"), 80)
         if not one:
             continue
-        terms = []
         text_i = paras[i].get("text") or ""
+        sec_i = _heading_ctx(paras, i)
         any_sm = False
+        picked = {}  # canon -> term dict（同段同一词的两种写法只留一条）
         for t in (it.get("terms") or [])[:3]:
             if isinstance(t, dict) and t.get("t"):
                 tt = _s(t.get("t"), 40)
-                sm = bool(t.get("selfmade")) and (not SELF_MADE_GUARD or term_selfmade_ok(text_i, tt))
+                sm = bool(t.get("selfmade")) and (
+                    not SELF_MADE_GUARD or term_selfmade_ok(text_i, tt, sec_i))
                 any_sm = any_sm or sm
-                terms.append({"t": tt, "zh": _s(t.get("zh"), 40),
-                              "selfmade": sm,
-                              "why": _s(t.get("why"), 40) if sm else ""})
+                one = {"t": tt, "zh": _s(t.get("zh"), 40),
+                       "selfmade": sm,
+                       "why": _s(t.get("why"), 40) if sm else ""}
+                key = _canon_term(tt)
+                old = picked.get(key)
+                if old is None or (sm and not old["selfmade"]):
+                    picked[key] = one
+        terms = list(picked.values())
         role = _s(it.get("role"), 8).strip()
         if role not in ROLES:
             role = ""
@@ -856,7 +1060,7 @@ def annotate_batch(parsed, idxs, timeout=120):
             "terms": terms,
             "selfmade": any_sm
                         or (bool(it.get("selfmade")) and (not SELF_MADE_GUARD or selfmade_ok(text_i)))
-                        or (SELF_MADE_GUARD and strong_definition(text_i)),
+                        or (SELF_MADE_GUARD and strong_definition(text_i, sec_i)),
             "anchor": paras[i].get("anchor"),
         })
     meta = {

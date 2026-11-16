@@ -190,6 +190,11 @@ def save_paper(payload):
     patch["size"] = os.path.getsize(full)
     with _STORE_LOCK:
         data = store.merge(sha, patch, path=rel)
+        if "annots" in patch:
+            # 批注是一段一批存进来的，同一个自创术语可能在多段被标；落盘前统一去重
+            ann, _n = llm.dedupe_selfmade_annots(data.get("annots") or {})
+            if _n:
+                data = store.merge(sha, {"annots": ann}, path=rel)
     return {"ok": True, "sha": sha, "counts": {
         "notes": len(data.get("notes") or []),
         "asks": len(data.get("asks") or []),
