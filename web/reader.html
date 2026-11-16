@@ -571,9 +571,20 @@ async function saveStore(patch, forPath) {
     if (data.error) throw new Error(data.error);
     return data;
   } catch (err) {
-    // 静默失败最坑：用户以为存好了，下次打开却没有。这里必须说出来。
+    // 静默失败最坑：用户以为存好了，下次打开却没有。这里必须说出来，但要说对原因。
     console.warn("存本地书库失败", err);
-    warnBar("⚠ 本地书库写入失败（后端可能还是旧进程，Ctrl+C 后重启 server.py）：" + String(err.message || err));
+    const msg = String(err.message || err);
+    const key = target + "|" + msg;
+    if (msg.indexOf("找不到这个 PDF") >= 0) {
+      // 文件被移走/删掉：解析和摘要都还在内存里，只是没处存，不必每批都喊一次
+      if (saveStore._lastWarn !== key) {
+        saveStore._lastWarn = key;
+        warnBar("⚠ 这篇 PDF 已经不在 papers/ 里了（被移动或删除），结果存不进书库。放回原位置重新打开就能存下。");
+      }
+    } else if (saveStore._lastWarn !== key) {
+      saveStore._lastWarn = key;
+      warnBar("⚠ 本地书库写入失败：" + msg);
+    }
     return null;
   }
 }
