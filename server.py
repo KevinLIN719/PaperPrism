@@ -281,6 +281,7 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json({
                 "ok": True,
                 "demo": DEMO,
+                "usd_cny": llm.USD_CNY,      # 界面把美元成本换算成人民币时用这个汇率
                 "llm": {
                     "model": llm.config()["model"],
                     "base": llm.config()["base"],

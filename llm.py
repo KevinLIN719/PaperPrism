@@ -47,6 +47,17 @@ PRICE_BY_MODEL = {
     "deepseek-flash": "flash",
 }
 
+# 界面按人民币显示成本：牌价是美元，这里给一个固定汇率（不联网取实时汇率，
+# 免得页面每次刷新都在等第三方接口）。2026-11 约 7.1，可用环境变量 USD_CNY 覆盖。
+USD_CNY = float(os.environ.get("USD_CNY") or "7.10")
+
+
+def cost_cny(usd):
+    """美元成本 → 人民币；没有牌价（None）就原样返回 None，不瞎算。"""
+    if usd is None:
+        return None
+    return round(float(usd) * USD_CNY, 6)
+
 
 def price_key(model):
     return PRICE_BY_MODEL.get((model or "").strip().lower())
@@ -86,8 +97,10 @@ def cost_usd(usage, model=None, ts=None):
 
 
 def usage_info(usage, model=None, ts=None):
-    """给前端用的「用量 + 成本」摘要（页脚要显示 tokens / 成本每篇）。"""
+    """给前端用的「用量 + 成本」摘要（页脚要显示 tokens / 成本每篇）。
+    成本同时给美元与人民币：界面按人民币显示，csv/报告里仍能拿到美元原值。"""
     u = usage or {}
+    usd = cost_usd(u, model, ts)
     return {
         "model": model or config()["model"],
         "prompt_tokens": int(u.get("prompt_tokens") or 0),
@@ -95,7 +108,9 @@ def usage_info(usage, model=None, ts=None):
         "cache_hit_tokens": int(u.get("prompt_cache_hit_tokens") or 0),
         "cache_miss_tokens": int(u.get("prompt_cache_miss_tokens") or 0),
         "tokens": int(u.get("total_tokens") or 0),
-        "cost_usd": cost_usd(u, model, ts),
+        "cost_usd": usd,
+        "cost_cny": cost_cny(usd),
+        "usd_cny": USD_CNY,
         "peak": is_peak(ts),
     }
 

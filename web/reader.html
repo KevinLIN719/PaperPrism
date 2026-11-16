@@ -476,7 +476,7 @@ const statsEl = $("#stats");
 let state = { paras: [], sizes: {}, zoom: 1, sel: -1, doc: null, fitW: 0, summary: null, drawn: new Set(), obs: null,
   annots: {}, annoTotal: 0, annoDone: 0, annoFail: 0, annoToken: 0,
   path: "", sha: "", notes: [], asks: [], meta: null, fromCache: false, layout: null,
-  usage: null, statsBase: "", modelName: "" };
+  usage: null, statsBase: "", modelName: "", usdCny: 7.1 };   // usdCny：美元→人民币，由 /api/health 覆盖
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = "/vendor/pdf.worker.min.js";
 
@@ -661,11 +661,23 @@ function usageAdd(meta) {
   const c = (meta && meta.cost) || null;
   const tok = c ? Number(c.tokens) || 0 : Number((meta && meta.usage || {}).total_tokens) || 0;
   if (!tok && !c) return;
-  const cur = state.usage || (state.usage = { tokens: 0, usd: 0, model: "", unpriced: false });
+  const cur = state.usage || (state.usage = { tokens: 0, cny: 0, usd: 0, model: "", unpriced: false });
+  // 老记录只存了美元（没有 cny 字段）：先按汇率补一个起点，不然累加会把它抹掉
+  if (cur.cny === null || cur.cny === undefined) {
+    cur.cny = (Number(cur.usd) || 0) * (Number(state.usdCny) || 7.1);
+  }
   cur.tokens += tok;
   if (c) {
-    if (c.cost_usd === null || c.cost_usd === undefined) cur.unpriced = true;
-    else cur.usd = Number(cur.usd || 0) + (Number(c.cost_usd) || 0);
+    if (c.cost_cny === null || c.cost_cny === undefined) {
+      if (c.cost_usd === null || c.cost_usd === undefined) cur.unpriced = true;
+      // 旧后端只给美元 / 或只给了美元：按当前汇率折一下，别让页脚整块消失
+      else cur.cny = Number(cur.cny || 0) + (Number(c.cost_usd) || 0) * (Number(c.usd_cny) || state.usdCny);
+    } else {
+      cur.cny = Number(cur.cny || 0) + (Number(c.cost_cny) || 0);
+    }
+    if (c.cost_usd !== null && c.cost_usd !== undefined) {
+      cur.usd = Number(cur.usd || 0) + (Number(c.cost_usd) || 0);
+    }
     if (c.model) cur.model = c.model;
   }
   refreshStats();
@@ -675,12 +687,22 @@ function fmtTokens(n) {
   return n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(n);
 }
 
+/* 人民币金额：几毛钱的时候多留一位，不然 ¥0.05 看着像免费 */
+function fmtCny(v) {
+  const n = Number(v) || 0;
+  if (n >= 1) return n.toFixed(2);
+  if (n >= 0.1) return n.toFixed(2);
+  return n.toFixed(3);
+}
+
 function usageText() {
   const u = state.usage;
   if (!u || !u.tokens) return "";
   const head = "模型 " + escapeHtml(u.model || state.modelName || "默认模型") + " · tokens " + fmtTokens(u.tokens);
-  // 没有牌价的模型（换了厂商/自带模型）不要瞎算：显示「未估算」
-  return head + (u.unpriced || u.usd === null ? " · 成本 未估算" : " · 成本 ≈$" + Number(u.usd || 0).toFixed(4));
+  if (u.unpriced) return head + " · 成本 未估算";
+  const cny = (u.cny !== null && u.cny !== undefined) ? Number(u.cny) : Number(u.usd || 0) * state.usdCny;
+  if (!cny) return head + " · 成本 ≈¥0.000";
+  return head + " · 成本 ≈¥" + fmtCny(cny);
 }
 
 /* 状态行 = 基础信息（段数/耗时/版式，解析时写入）+ 累计用量（摘要与批注陆续到达时补上） */
@@ -1945,6 +1967,8 @@ $("#settest").onclick = testSettings;
 async function initDemo() {
   try {
     const d = await (await fetch("/api/health")).json();
+    if (d.usd_cny) state.usdCny = Number(d.usd_cny) || state.usdCny;   // 成本按人民币显示
+    refreshStats();
     if (!d.demo) return;
     $("#demostrip").hidden = false;
     const sb = $("#setbtn");
