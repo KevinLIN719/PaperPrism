@@ -776,14 +776,11 @@ async function restoreBundle(b) {
   if (!state.summary) { missing.push("摘要"); summarize(); }
   if (!b.repro || !b.repro.card) { missing.push("复现体检"); reproCheck(); }
   if (!Object.keys(state.annots).length) { missing.push("逐段批注"); annotateAll(); }
-  const zhNotes = (b.zhihu && b.zhihu.status === "ok")
-    ? ` · 知乎讨论走缓存（${b.zhihu.total || 0} 条，见「知乎」页）`
-    : "";
-  const lwCache = state.layout ? (state.layout.verified ? "已验证" : "未验证") : "—";
   state.usage = b.usage || null;      // 书库里存着上次算的总 tokens / 成本
-  state.statsBase = `从本地书库恢复：${state.paras.length} 段 · 批注 ${Object.keys(state.annots).length} 段 · 笔记 ${state.notes.length} 条 · 追问 ${state.asks.length} 次` +
-    ` · 版式 ${lwCache}` + (state.parseVersion ? ` · 解析 v${state.parseVersion}` : "") +
-    (missing.length ? ` · 正在补生成：${missing.join(" / ")}` : "（未调用模型）") + zhNotes;
+  // 书库回放只说一句「从本地书库恢复」；段数/批注数在左栏状态与右侧「路线」页里都看得到，
+  // 版式是否已验证由页顶黄条在「未验证」时显式提示，所以这里不再堆参数。
+  state.statsBase = "从本地书库恢复" +
+    (missing.length ? ` · 正在补生成：${missing.join(" / ")}` : "");
   refreshStats();
   maybeZhihu();   // 有缓存就直接显示，没有才真去搜；同一篇只搜一次
 }
