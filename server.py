@@ -31,7 +31,11 @@ import m1_parse  # noqa: E402  （要先把 vendor 路径塞进去，所以放�
 WEB_DIR = os.path.join(ROOT, "web")
 PAPERS_DIR = os.path.join(ROOT, "papers")
 IMPORT_DIR = os.path.join(PAPERS_DIR, "imported")   # 用户拖进来的 PDF 存这里
-PORT = int(os.environ.get("PAPERPRISM_PORT", "8765"))
+# 地址与端口：本地默认只监听回环；Railway 这类平台会注入 $PORT 并要求监听 0.0.0.0
+PORT = int(os.environ.get("PORT") or os.environ.get("PAPERPRISM_PORT") or "8765")
+HOST = os.environ.get("PAPERPRISM_HOST", "127.0.0.1")
+# 演示实例：页面常驻一句「文件会留在这台机器上」，并且锁掉模型设置（免得访客换 key）
+DEMO = os.environ.get("PAPERPRISM_DEMO") == "1"
 
 # 批注是 2 个并发 worker 一批一批回写的，store.merge 是「读文件 → 改 → 写回」，
 # 不加锁就会互相覆盖（丢批注）。所有书库写入都走这把锁。
@@ -276,6 +280,7 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/health":
             return self.send_json({
                 "ok": True,
+                "demo": DEMO,
                 "llm": {
                     "model": llm.config()["model"],
                     "base": llm.config()["base"],
@@ -351,9 +356,13 @@ class Handler(SimpleHTTPRequestHandler):
             n = int(self.headers.get("Content-Length") or 0)
             payload = json.loads(self.rfile.read(n).decode("utf-8") or "{}")
             if route == "/api/settings":       # 保存模型配置（写 settings.json，不重启即生效）
+                if DEMO:                       # 演示实例不允许访客改 key / 换厂商
+                    return self.send_json({"error": "演示实例已锁定模型设置"}, 403)
                 llm.save_settings(payload)
                 return self.send_json(llm.settings_info())
             if route == "/api/settings/test":  # 测试连接：发一个几 token 的请求
+                if DEMO:
+                    return self.send_json({"ok": False, "error": "演示实例已锁定模型设置"})
                 return self.send_json(llm.test_connection())
             if route == "/api/parse":
                 return self.send_json(parse_cached(payload))
@@ -410,7 +419,7 @@ class Handler(SimpleHTTPRequestHandler):
 
 
 def main():
-    addr = ("127.0.0.1", PORT)
+    addr = (HOST, PORT)
     srv = ThreadingHTTPServer(addr, Handler)
     print("PaperPrism backend  ->  http://%s:%d" % addr)
     print("papers/ 里有 %d 篇 PDF" % len(list_papers()))

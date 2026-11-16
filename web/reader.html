@@ -32,6 +32,10 @@
   #drop { position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
           background: rgba(31, 41, 51, .55); z-index: 90; pointer-events: none; }
   #drop.on { display: flex; }
+  /* 演示实例常驻说明：这台机器上 PDF 会被留存，与「本机运行、PDF 不上传」的正式形态不同 */
+  #demostrip { position: sticky; top: 0; z-index: 6; padding: 7px 16px; font-size: 12.5px; line-height: 1.55;
+               background: #fdf3d8; color: #7a5c1f; border-bottom: 1px solid #eedcae; }
+  #demostrip b { color: #6b4f14; }
   #drop div { background: #fff; border-radius: 12px; padding: 26px 34px; font-size: 15px; color: #2b2b2b;
               box-shadow: 0 12px 40px rgba(0,0,0,.25); text-align: center; line-height: 1.9; }
   #drop b { display: block; font-size: 17px; margin-bottom: 4px; }
@@ -391,7 +395,7 @@
     <span id="stats">原版式 · 段落可点</span>
     <span id="usage"></span>
   </div>
-  <div id="scroll"><div id="layoutwarn" hidden></div><div id="pages"><p class="hint" style="padding:24px">选一篇 PDF，点「解析」。这一版保留论文原版式，段落变成可点的热区。</p></div></div>
+  <div id="scroll"><div id="demostrip" hidden>这是一台<b>演示实例</b>：你上传的 PDF 会留在这台服务器上，仅供评审试用。正式形态在本机运行，PDF 不上传、只把段落文本发给模型。</div><div id="layoutwarn" hidden></div><div id="pages"><p class="hint" style="padding:24px">选一篇 PDF，点「解析」。这一版保留论文原版式，段落变成可点的热区。</p></div></div>
 </div>
 
 <div id="panel">
@@ -1924,8 +1928,22 @@ $("#setmask").addEventListener("click", (e) => { if (e.target.id === "setmask") 
 $("#setsave").onclick = saveSettings;
 $("#settest").onclick = testSettings;
 
+// 演示实例（PAPERPRISM_DEMO=1）：显示常驻说明、藏掉模型设置（访客不该换 key）
+async function initDemo() {
+  try {
+    const d = await (await fetch("/api/health")).json();
+    if (!d.demo) return;
+    $("#demostrip").hidden = false;
+    const sb = $("#setbtn");
+    if (sb) sb.style.display = "none";
+    const dr = $("#drop div");
+    if (dr) dr.innerHTML = "<b>松手就打开</b>演示实例：文件会留在这台服务器上；正式形态在本机运行、PDF 不上传";
+  } catch (err) { /* 离线或静态打开时忽略 */ }
+}
+
 loadList();
 bindDrop();
+initDemo();
 </script>
 </body>
 </html>

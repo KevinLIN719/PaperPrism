@@ -40,3 +40,8 @@ nul
 
 # 界面里保存的模型配置（可能含 key，绝不进仓库）
 /settings.json
+
+# ---------------- 演示实例用的固定论文（只放 arXiv / 公开许可的 4 篇，约 4MB）----------------
+# 上面的 *.pdf 会误伤，这里显式放行；demo_papers/ 是线上 Demo 的唯一语料。
+!demo_papers/
+!demo_papers/*.pdf
