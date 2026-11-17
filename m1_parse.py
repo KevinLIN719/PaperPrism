@@ -166,7 +166,100 @@ def reading_order_lines(lines, tol=2.5):
     return out
 
 
-def page_blocks(page):
+def _figure_regions(page):
+    """这一页上「图/表占据的区域」：位图 + 矢量绘图聚簇。
+
+    为什么要它：
+    - 图注常被 PyMuPDF 和图里的文字标签并成一个大 block（bmp），bbox 横跨整张图；
+    - 正文绕着图走（L 形）时，同一段的窄半截和宽半截 x0 差几十 pt。
+    有了区域，就能把「图里的小字」从 block 里摘掉、把正文段落按栏内 band 切开。
+    """
+    W, H = page.rect.width, page.rect.height
+    rects = []
+    try:
+        for im in page.get_image_info():
+            r = pymupdf.Rect(im["bbox"])
+            if r.width >= 18 and r.height >= 18:
+                rects.append(r)
+    except Exception:
+        pass
+    try:
+        for d in page.get_drawings():
+            r = d["rect"]
+            # 贯穿整页的细线是页边框/栏分隔线；小于 10x6 的是刻度、符号
+            if r.width >= W * 0.85 or r.height >= H * 0.85:
+                continue
+            if r.width < 6 or r.height < 3:
+                continue
+            rects.append(pymupdf.Rect(r))
+    except Exception:
+        pass
+    if not rects:
+        return []
+    # 聚簇：图由多个面板/位图拼成，面板之间常隔着 20–40pt。
+    # 判据用「一个方向贴得近 + 另一个方向有明显重叠」：既能拼回同一张图，
+    # 又不会把上下两段正文和它旁边的图粘成一片。
+    def _near(a, b):
+        x_gap = max(b.x0 - a.x1, a.x0 - b.x1)
+        y_gap = max(b.y0 - a.y1, a.y0 - b.y1)
+        x_ov = min(a.x1, b.x1) - max(a.x0, b.x0)
+        y_ov = min(a.y1, b.y1) - max(a.y0, b.y0)
+        min_w = max(min(a.width, b.width), 1.0)
+        min_h = max(min(a.height, b.height), 1.0)
+        if x_gap <= 30 and y_ov >= min_h * 0.35:
+            return True
+        if y_gap <= 30 and x_ov >= min_w * 0.35:
+            return True
+        return x_gap <= 6 and y_gap <= 6
+
+    merged = True
+    while merged and len(rects) > 1:
+        merged = False
+        out = []
+        for r in rects:
+            for o in out:
+                if _near(r, o):
+                    o.include_rect(r)
+                    merged = True
+                    break
+            else:
+                out.append(pymupdf.Rect(r))
+        rects = out
+    page_area = W * H
+    keep = []
+    for r in rects:
+        # 太小的（一条下划线、一个箭头）不算图
+        if r.get_area() < page_area * 0.004 or r.width < 40 or r.height < 40:
+            continue
+        keep.append((round(r.x0, 1), round(r.y0, 1), round(r.x1, 1), round(r.y1, 1)))
+    return keep
+
+
+def _inside_region(bbox, regions, inset=2.0):
+    x0, y0, x1, y1 = bbox
+    cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+    for rx0, ry0, rx1, ry1 in regions:
+        if rx0 + inset <= cx <= rx1 - inset and ry0 + inset <= cy <= ry1 - inset:
+            return True
+    return False
+
+
+def _union_region(bbox, regions, gap=26.0):
+    """图注挨着图/表时，把两者并成一个矩形（用户要的「图注与图表框在一起」）。"""
+    x0, y0, x1, y1 = bbox
+    best = None
+    for rx0, ry0, rx1, ry1 in regions:
+        if ry0 - gap <= y1 and ry1 + gap >= y0 and rx0 - gap <= x1 and rx1 + gap >= x0:
+            area = (rx1 - rx0) * (ry1 - ry0)
+            if best is None or area > best[0]:
+                best = (area, (rx0, ry0, rx1, ry1))
+    if not best:
+        return bbox
+    rx0, ry0, rx1, ry1 = best[1]
+    return (min(x0, rx0), min(y0, ry0), max(x1, rx1), max(y1, ry1))
+
+
+def page_blocks(page, regions=None):
     """返回这一页的文本块：bbox、文本、行数、平均行高。
 
     PyMuPDF 的一个 block 有时会把相邻两段并在一起，这里按行间距再切一次：
@@ -174,6 +267,8 @@ def page_blocks(page):
     """
     d = page.get_text("dict")
     H = page.rect.height
+    if regions is None:
+        regions = _figure_regions(page)
     blocks = []
     for b in d["blocks"]:
         if b.get("type") != 0:          # 0 = 文本块，1 = 图片
@@ -181,6 +276,21 @@ def page_blocks(page):
         lines = b.get("lines") or []
         # 旋转 90 度的竖排水印（"Downloaded from … on …"）直接丢掉
         lines = [l for l in lines if abs(l.get("dir", (1, 0))[1]) < 1e-3]
+        if regions:
+            # 只丢「整行都在图区里、且很短」的行——那是图里的「a b c」「400 pA」这类标注。
+            # 长行可能是真正文（文字压在图上），不能按区域一刀切。
+            def _keep_line(l):
+                txt = "".join(sp["text"] for sp in l["spans"]).strip()
+                if len(txt) > 16:            # 长行可能是正文，宁可留着
+                    return True
+                if re.fullmatch(r"\d{1,3}", txt):   # 代码清单的行号
+                    return True
+                for sp in l["spans"]:        # 代码行再短也要留（v10 的代码块规则优先）
+                    if MONO_FONT.search(sp.get("font") or ""):
+                        return True
+                return not _inside_region(l["bbox"], regions, inset=0.0)
+
+            lines = [l for l in lines if _keep_line(l)]
         # 先按阅读顺序排（同一行内左→右），再把被拆开的同一行拼回去。
         # 顺序不能反：PyMuPDF 的两段同一行可能 y 差 0.3pt，按 y 排序会把右半截排在前面，
         # 拼回一行时被判成「不在右边」而拼不上。
@@ -237,8 +347,19 @@ def page_blocks(page):
             gx1 = max(l["bbox"][2] for l in grp)
             gy0 = grp[0]["bbox"][1]
             gy1 = grp[-1]["bbox"][3]
+            # v12：同一块里的行如果左右边缘变化超过 24pt（正文绕图走），
+            # 就分成多个「栏内 band」；rects 按 band 生成，前端才不会横跨图区。
+            bands = []
+            for l in grp:
+                bx0, by0, bx1, by1 = l["bbox"]
+                if bands and abs(bx0 - bands[-1][0]) <= 24 and abs(bx1 - bands[-1][2]) <= 24:
+                    b = bands[-1]
+                    bands[-1] = (min(b[0], bx0), min(b[1], by0), max(b[2], bx1), max(b[3], by1))
+                else:
+                    bands.append((bx0, by0, bx1, by1))
             blocks.append({
                 "bbox": (gx0, gy0, gx1, gy1),
+                "bands": [tuple(round(v, 1) for v in b) for b in bands],
                 "text": text.strip(),
                 "nlines": len(grp),
                 "h": (gy1 - gy0) / max(len(grp), 1),
@@ -545,7 +666,7 @@ def coalesce_rects(rects):
             # 色条和热区就盖到图上去了。
             same_col = abs(x0 - ox0) <= 25
             gap = y0 - oy1
-            if same_col and gap <= max(2.0, min(h, oh) * 0.9) and gap >= -1.0:
+            if same_col and gap <= max(2.0, min(h, oh) * 0.9) and gap >= -min(h, oh) * 0.6:
                 tgt = o
                 break
         if tgt is None:
@@ -695,7 +816,7 @@ def merge_paragraphs(blocks):
                     prev["text"] = prev["text"].rstrip("\n") + "\n" + (b["text"] or "").strip()
                     prev["bbox"] = (prev["bbox"][0], prev["bbox"][1], b["bbox"][2], b["bbox"][3])
                     prev["nlines"] += b["nlines"]
-                    prev["rects"].append(_rect_of(b))
+                    prev["rects"].extend(_rects_of(b))
                     continue
             # 中文期刊的一行常常就是一个 block（PyMuPDF 不给整段），一行只有 20 来个字，
             # 过不了「> 80 字符」这道门槛，整段就被切成十几个碎块。
@@ -731,10 +852,10 @@ def merge_paragraphs(blocks):
                 prev["text"] = join_cjk_aware(prev["text"], b["text"])
                 prev["bbox"] = (prev["bbox"][0], prev["bbox"][1], b["bbox"][2], b["bbox"][3])
                 prev["nlines"] += b["nlines"]
-                prev["rects"].append(_rect_of(b))
+                prev["rects"].extend(_rects_of(b))
                 continue
         p = dict(b)
-        p["rects"] = [_rect_of(b)]
+        p["rects"] = _rects_of(b)
         p["code"] = _is_code_block(b)       # v10（T01）：代码段标记，供 kind/保字规则使用
         paras.append(p)
     return paras
@@ -1388,11 +1509,13 @@ LAST_EMPTY_REASON = None
 
 # 解析规则的版本号：改了分段/分类规则就 +1，服务端据此把旧书库里的解析结果判为过期、
 # 重新解析并重新批注（否则修好的分类逻辑对已经解析过的论文不生效）。
-PARSE_VERSION = 11
+PARSE_VERSION = 12
 
 
-def _rect_of(b):
-    return {"page": b["page"], "bbox": [round(v, 1) for v in b["bbox"]]}
+def _rects_of(b):
+    """一个文本块的 rects：按栏内 band 分开（绕图的段落会有两条）。"""
+    bands = b.get("bands") or [b["bbox"]]
+    return [{"page": b["page"], "bbox": [round(v, 1) for v in band]} for band in bands]
 
 
 # ---------------------------------------------------------------- 表格
@@ -1568,7 +1691,8 @@ def parse_pdf(path, only_page=None):
         if only_page and pno != only_page:
             continue
         raw_chars += len(page.get_text("text"))
-        blocks = page_blocks(page)
+        regions = _figure_regions(page)          # v12：图/表区域，用来切开绕图的段落
+        blocks = page_blocks(page, regions)
         tables = page_tables(blocks, page)                 # 只有出现「Table N:」图注时才检测
         if tables:
             blocks = drop_table_blocks(blocks, tables)     # 表格单元格不当正文段落
@@ -1635,12 +1759,24 @@ def parse_pdf(path, only_page=None):
                 continue
             if k == "body" and not body_fs:
                 body_fs = para.get("fs") or 0.0
+            rects = para["rects"]
+            if k == "caption" and regions:
+                # v12：图注挨着图/表时，把两者并进同一个矩形（用户读图注时能一眼看到对应的图）。
+                # 并完之后，被大矩形包住的小矩形要去掉，否则前端会叠着画两条色条。
+                grown = [list(_union_region(tuple(r["bbox"]), regions)) for r in rects]
+                kept = []
+                for i, g in enumerate(grown):
+                    inside = any(j != i and h[0] <= g[0] + 1 and h[1] <= g[1] + 1
+                                 and h[2] >= g[2] - 1 and h[3] >= g[3] - 1 for j, h in enumerate(grown))
+                    if not inside:
+                        kept.append([round(v, 1) for v in g])
+                rects = [{"page": rects[0]["page"], "bbox": b} for b in kept] or rects
             item = {
                 "page": pno,
                 "col": para["col"],
                 "kind": k,
                 "fs": round(para.get("fs", 0.0), 1),
-                "rects": para["rects"],
+                "rects": rects,
                 "text": para["text"],
             }
             if k == "heading":
