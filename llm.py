@@ -237,7 +237,46 @@ def test_connection():
     }
 
 
-# ---------------------------------------------------------------- HTTP
+# ---------------------------------------------------------------- HTTP 连接策略
+# 2026-11-17 实测（本机开着系统代理 Clash 127.0.0.1:7897 时打 api.deepseek.com）：
+#   走系统代理 6/10 成功、4 次死在 [SSL: UNEXPECTED_EOF_WHILE_READING]，平均 1.2s；
+#   强制直连 10/10 成功、平均 215ms。也就是说那个 SSL 报错不是 DeepSeek 挂了，
+#   是本机代理把 TLS 连接掐断。所以模型接口默认直连：
+#   - LLM_USE_SYSTEM_PROXY=1 反过来优先走系统代理（海外/公司网络用，base 是境外域名时）
+#   - 直连失败且系统确实配了代理时，自动再用系统代理补一次
+_OPENER_DIRECT = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+_OPENER_SYS = urllib.request.build_opener()
+
+
+def _use_system_proxy():
+    return (os.environ.get("LLM_USE_SYSTEM_PROXY") or "").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+def _has_system_proxy():
+    try:
+        return bool(urllib.request.getproxies())
+    except Exception:
+        return False
+
+
+def _open(req, timeout):
+    """按连接策略发请求。直连失败时用另一条通道补一次，两条都挂才抛错。"""
+    order = (_OPENER_SYS, _OPENER_DIRECT) if _use_system_proxy() else (_OPENER_DIRECT, _OPENER_SYS)
+    first_err = None
+    for opener in order:
+        if opener is _OPENER_SYS and not _has_system_proxy():
+            continue
+        try:
+            return opener.open(req, timeout=timeout)
+        except urllib.error.HTTPError:
+            raise                      # 服务端已经应答了，换通道没意义
+        except Exception as exc:
+            if first_err is None:
+                first_err = exc
+    if first_err is not None:
+        raise first_err
+    raise RuntimeError("没有可用的网络通道（直连与系统代理都没通）")
 
 
 def chat(messages, temperature=0.3, max_tokens=2400, timeout=120, json_mode=True):
@@ -268,13 +307,18 @@ def chat(messages, temperature=0.3, max_tokens=2400, timeout=120, json_mode=True
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _open(req, timeout) as resp:
             raw = resp.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", "replace")[:400]
         raise RuntimeError("模型接口返回 HTTP %s：%s" % (exc.code, detail))
     except urllib.error.URLError as exc:
-        raise RuntimeError("连不上模型接口（%s）：%s" % (cfg["base"], exc.reason))
+        reason = exc.reason
+        hint = ""
+        if "UNEXPECTED_EOF" in str(reason) or "SSL" in str(reason):
+            hint = ("｜这多半是本机代理/加速器掐断了 TLS（本项目默认已改直连）；"
+                    "仍不行就关掉代理，或反向设 LLM_USE_SYSTEM_PROXY=1 强制走代理")
+        raise RuntimeError("连不上模型接口（%s）：%s%s" % (cfg["base"], reason, hint))
 
     try:
         data = json.loads(raw)
