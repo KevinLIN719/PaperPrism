@@ -1872,15 +1872,37 @@ def parse_pdf(path, only_page=None):
             if k == "caption" and regions:
                 # v12：图注挨着图/表时，把两者并进同一个矩形（用户读图注时能一眼看到对应的图）。
                 # 并完之后，被大矩形包住的小矩形要去掉，否则前端会叠着画两条色条。
-                # v12c：不再并成一个大 bbox（那会把图注与图之间的其它正文也圈进来，
-                # 视觉上「框过大、压到旁边文字」）。改成**多个紧贴的矩形**：
-                # 图注自己一个框 + 相邻图区各自一个框，框与框之间不留空、也不互相包含。
-                cb = [round(v, 1) for v in tuple(rects[0]["bbox"])]
-                for r in rects[1:]:           # 图注自己可能是多段 band，取整个图注的包围盒作锚
-                    b = [round(v, 1) for v in tuple(r["bbox"])]
-                    cb = [min(cb[0], b[0]), min(cb[1], b[1]), max(cb[2], b[2]), max(cb[3], b[3])]
-                near, seen_box = [cb], {tuple(cb)}
+                # v12d：图注框 = 「图注文字自己的矩形」+「相邻图区各自的矩形」。
+                # 关键点：图注与图区都**不合并成一个 bbox**（那会把中间的空白和
+                # 同水平带上的其它文字一起圈进来，视觉上「框压字」）；
+                # 同时图注块与图区互相「挖除」对方，避免一个框把另一个吞掉——
+                # 这正是 Figure 1 / Figure 4 显示成「图注与图合并」而其它页分开的原因。
+                bands = [[round(v, 1) for v in tuple(r["bbox"])] for r in rects]
+                cb = list(bands[0])
+                for b in bands[1:]:
+                    cb = [min(cb[0], b[0]), min(cb[1], b[1]),
+                          max(cb[2], b[2]), max(cb[3], b[3])]
                 pool = [[round(v, 1) for v in rr] for rr in regions + grid_regions]
+
+                def _cut(g, hole):
+                    """从矩形 g 里挖掉 hole（最多切成四块，太碎的直接丢）。"""
+                    gx0, gy0, gx1, gy1 = g
+                    hx0, hy0, hx1, hy1 = hole
+                    if gx1 <= hx0 or gx0 >= hx1 or gy1 <= hy0 or gy0 >= hy1:
+                        return [g]
+                    out = []
+                    if hx0 - gx0 >= 4:
+                        out.append([gx0, gy0, hx0, gy1])
+                    if gx1 - hx1 >= 4:
+                        out.append([hx1, gy0, gx1, gy1])
+                    if hy0 - gy0 >= 4:
+                        out.append([max(gx0, hx0), gy0, min(gx1, hx1), hy0])
+                    if gy1 - hy1 >= 4:
+                        out.append([max(gx0, hx0), hy1, min(gx1, hx1), gy1])
+                    # 太细的碎片（1–7pt 宽的边角）留着只会让画面变脏
+                    return [r for r in out
+                            if (r[2] - r[0]) >= 10 and (r[3] - r[1]) >= 10
+                            and (r[2] - r[0]) * (r[3] - r[1]) >= 2500]
 
                 def _related(a, b, gap=CAP_UNION_GAP + 4):
                     y_ov = min(a[3], b[3]) - max(a[1], b[1])
@@ -1889,7 +1911,8 @@ def parse_pdf(path, only_page=None):
                     same_col = x_ov >= 0.6 * min(a[2] - a[0], b[2] - b[0]) and -gap <= y_ov
                     return same_row or same_col
 
-                # 先从图注出发收一圈，再做传递闭包（多面板图可能有好几层，靠相邻块连起来）
+                # 收「这一条图注的图」：从图注出发，再做传递闭包（多面板可能好几层）
+                near, seen_box = [cb], {tuple(cb)}
                 added = True
                 while added:
                     added = False
@@ -1901,8 +1924,11 @@ def parse_pdf(path, only_page=None):
                             seen_box.add(key)
                             near.append(g)
                             added = True
-                # 图区内部再合并（同一张图的多块面板），但**绝不和图注 bbox 合并**
-                figs = [g for g in near[1:]]
+
+                figs = []
+                for g in near[1:]:
+                    figs.extend(_cut(g, cb))
+                # 图区彼此合并（同一张图的多块面板），但绝不并进图注框
                 merged = True
                 while merged:
                     merged = False
@@ -1918,10 +1944,26 @@ def parse_pdf(path, only_page=None):
                                 break
                         if merged:
                             break
-                near = [cb] + figs
-                kept = [g for g in near
+                # 合并可能又把图注框盖住，合并后必须再挖一次
+                cut_figs = []
+                for g in figs:
+                    cut_figs.extend(_cut(g, cb))
+                figs = cut_figs
+
+                # 图注自己的矩形：把图区从里面挖掉（图注块把图里小标签并进来时，
+                # 它的 bbox 会横跨整张图；挖掉后才是真正的「图注文字框」）
+                pieces = []
+                for b in bands:
+                    cur = [b]
+                    for g in figs:
+                        cur = [x for c in cur for x in _cut(c, g)]
+                    pieces.extend(cur)
+                if not pieces:                     # 太小被全剪掉时退回原矩形
+                    pieces = bands
+                nxt = pieces + figs
+                kept = [g for g in nxt
                         if not any(h != g and h[0] <= g[0] + 1 and h[1] <= g[1] + 1
-                                   and h[2] >= g[2] - 1 and h[3] >= g[3] - 1 for h in near)]
+                                   and h[2] >= g[2] - 1 and h[3] >= g[3] - 1 for h in nxt)]
                 rects = [{"page": rects[0]["page"], "bbox": b} for b in kept] or rects
             item = {
                 "page": pno,
