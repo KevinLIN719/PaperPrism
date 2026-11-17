@@ -795,9 +795,18 @@ async function restoreBundle(b) {
   if (state.summary) renderSummary(state.summary, b.summary_meta || { model: "本地缓存", ms: 0, mode: "single", chars: 0 });
   // 体检卡也要回放：以前只在下一次 reproCheck 时才有内容，缓存命中就一直是空的（还会残留上一篇的卡）
   if (b.repro && b.repro.card) renderRepro(b.repro.card, b.repro.meta || { model: "本地缓存", ms: 0 });
-  if (Object.keys(state.annots).length) {
-    state.annoTotal = Object.keys(state.annots).length;
-    state.annoDone = state.annoTotal;
+  // 逐段批注：只统计「有正文的段」（图注不做逐段批注，本来就没有色条）
+  let annoableTotal = 0;
+  let annoHave = 0;
+  state.paras.forEach((p, i) => {
+    if (p.kind !== "body" || p.chars < 40) return;
+    annoableTotal++;
+    if (state.annots[i]) annoHave++;
+  });
+  const annoLeft = annoableTotal - annoHave;
+  if (annoHave) {
+    state.annoTotal = annoableTotal;
+    state.annoDone = annoHave;
     markAnnotated();
     renderLegend();
     annoLine();
@@ -809,7 +818,7 @@ async function restoreBundle(b) {
   const missing = [];
   if (!state.summary) { missing.push("摘要"); summarize(); }
   if (!b.repro || !b.repro.card) { missing.push("复现体检"); reproCheck(); }
-  if (!Object.keys(state.annots).length) { missing.push("逐段批注"); annotateAll(); }
+  if (annoLeft) { missing.push(`逐段批注补 ${annoLeft} 段`); annotateAll(); }
   state.usage = b.usage || null;      // 书库里存着上次算的总 tokens / 成本
   // 书库回放只说一句「从本地书库恢复」；段数/批注数在左栏状态与右侧「路线」页里都看得到，
   // 版式是否已验证由页顶黄条在「未验证」时显式提示，所以这里不再堆参数。
@@ -1487,10 +1496,16 @@ async function annotateAll() {
     // 漏标就会在页边上留一段没有色条的空白，读者会以为是 bug。
     if (p.kind === "body" && p.chars >= 40) list.push(i);
   });
-  const idxs = list.slice(0, 400);         // 上限只是防跑飞：正常论文 100–200 段
-  if (!idxs.length) return;
-  state.annoTotal = idxs.length;
+  const all = list.slice(0, 400);          // 上限只是防跑飞：正常论文 100–200 段
+  if (!all.length) return;
+  // 已经批注过的段不再问模型：书库里存着上一轮的批注，只补缺的那些。
+  // （以前只在「一条批注都没有」时才跑，部分批次失败的论文就永远留着没有色条的缺口）
+  const idxs = all.filter((i) => !state.annots[i]);
+  state.annoTotal = all.length;
+  state.annoDone = all.length - idxs.length;
+  state.annoFail = 0;
   annoLine();
+  if (!idxs.length) return;
 
   const batches = [];
   for (let k = 0; k < idxs.length; k += 4) batches.push(idxs.slice(k, k + 4));
@@ -1499,20 +1514,30 @@ async function annotateAll() {
     while (batches.length) {
       if (token !== state.annoToken) return;       // 换论文了，停
       const batch = batches.shift();
-      try {
-        const res = await fetch("/api/annotate", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ path: $("#pick").value, batch }),
-        });
-        const data = await res.json();
-        if (data.error) throw new Error(data.error);
-        (data.items || []).forEach((it) => { state.annots[it.idx] = it; });
-        state.annoDone += batch.length;
-        usageAdd(data.meta);     // 每批 4 段：成本和 tokens 累加进页脚
-        if (token === state.annoToken) saveStore({ annots: data.items || [], usage: state.usage });
-      } catch (err) {
+      let data = null;
+      for (let attempt = 0; attempt < 2 && !data; attempt++) {   // 接口偶发断流：重试一次
+        try {
+          const res = await fetch("/api/annotate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ path: $("#pick").value, batch }),
+          });
+          const d = await res.json();
+          if (d.error) throw new Error(d.error);
+          data = d;
+        } catch (err) {
+          if (attempt === 0) await new Promise((r) => setTimeout(r, 600));
+        }
+      }
+      if (!data) {
         state.annoFail += batch.length;
+      } else {
+        const items = data.items || [];
+        items.forEach((it) => { state.annots[it.idx] = it; });
+        state.annoDone += items.length;
+        state.annoFail += batch.length - items.length;   // 模型漏返回的段算失败，下次打开再补
+        usageAdd(data.meta);     // 每批 4 段：成本和 tokens 累加进页脚
+        if (token === state.annoToken) saveStore({ annots: items, usage: state.usage });
       }
       if (token !== state.annoToken) return;
       markAnnotated();
