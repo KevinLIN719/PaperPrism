@@ -235,6 +235,100 @@ def _figure_regions(page):
     return keep
 
 
+def _figure_regions_grid(page):
+    """这一页上「图/表占据的区域」。
+
+    为什么不用「把绘图矩形聚簇」：很多图（散点、波形、虚线）是画布上成百上千个
+    小 dot，单个矩形很小、彼此不重叠，按矩形聚簇只能拼出半张图。
+    这里改成栅格法：把图片和绘图标记都打到 6pt 的网格上，膨胀三格（18pt）后取连通块，
+    连通块的包围盒就是图区——散点云、多面板、图例都能连成一片。
+    """
+    W, H = page.rect.width, page.rect.height
+    cell = 6.0
+    nx, ny = int(W / cell) + 1, int(H / cell) + 1
+    grid = [[0] * nx for _ in range(ny)]
+
+    def _mark(x0, y0, x1, y1):
+        for yy in range(max(0, int(y0 // cell)), min(ny - 1, int(y1 // cell)) + 1):
+            row = grid[yy]
+            for xx in range(max(0, int(x0 // cell)), min(nx - 1, int(x1 // cell)) + 1):
+                row[xx] = 1
+
+    try:
+        for im in page.get_image_info():
+            r = pymupdf.Rect(im["bbox"])
+            if r.width >= 6 and r.height >= 6:
+                _mark(r.x0, r.y0, r.x1, r.y1)
+    except Exception:
+        pass
+    try:
+        for d in page.get_drawings():
+            r = d["rect"]
+            if r.width <= 0 or r.height <= 0:
+                continue
+            # 贯穿整页的细线是页边框/栏分隔线；页边竖排水印与页码装饰也不算图
+            if r.width >= W * 0.85 or r.height >= H * 0.85:
+                continue
+            if r.x1 < 46 or r.x0 > W - 46:
+                continue
+            _mark(r.x0, r.y0, r.x1, r.y1)
+    except Exception:
+        pass
+
+    # 膨胀：把同一张图里间隔十几个点的面板/图例连起来
+    for _ in range(3):
+        nxt = [row[:] for row in grid]
+        for yy in range(ny):
+            row = grid[yy]
+            for xx in range(nx):
+                if not row[xx]:
+                    continue
+                for dy in (-1, 0, 1):
+                    y2 = yy + dy
+                    if 0 <= y2 < ny:
+                        o = nxt[y2]
+                        for dx in (-1, 0, 1):
+                            x2 = xx + dx
+                            if 0 <= x2 < nx:
+                                o[x2] = 1
+        grid = nxt
+
+    seen = [[0] * nx for _ in range(ny)]
+    page_area = W * H
+    regions = []
+    for yy in range(ny):
+        for xx in range(nx):
+            if not grid[yy][xx] or seen[yy][xx]:
+                continue
+            stack = [(yy, xx)]
+            seen[yy][xx] = 1
+            x0 = x1 = xx
+            y0 = y1 = yy
+            n = 0
+            while stack:
+                cy, cx = stack.pop()
+                n += 1
+                if cx < x0: x0 = cx
+                if cx > x1: x1 = cx
+                if cy < y0: y0 = cy
+                if cy > y1: y1 = cy
+                for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                    y2, x2 = cy + dy, cx + dx
+                    if 0 <= y2 < ny and 0 <= x2 < nx and grid[y2][x2] and not seen[y2][x2]:
+                        seen[y2][x2] = 1
+                        stack.append((y2, x2))
+            bx0, by0 = x0 * cell, y0 * cell
+            bx1, by1 = (x1 + 1) * cell, (y1 + 1) * cell
+            if bx1 - bx0 < 30 or by1 - by0 < 30:
+                continue
+            if (bx1 - bx0) * (by1 - by0) < page_area * 0.008:
+                continue
+            if n < 40:
+                continue
+            regions.append((round(bx0, 1), round(by0, 1), round(bx1, 1), round(by1, 1)))
+    return regions
+
+
 def _inside_region(bbox, regions, inset=2.0):
     x0, y0, x1, y1 = bbox
     cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
@@ -244,19 +338,24 @@ def _inside_region(bbox, regions, inset=2.0):
     return False
 
 
-def _union_region(bbox, regions, gap=26.0):
-    """图注挨着图/表时，把两者并成一个矩形（用户要的「图注与图表框在一起」）。"""
+def _union_region(bbox, regions, gap=40.0):
+    """图注挨着图/表时，把相连的图区一块并进来（用户要的「图注与图表框在一起」）。
+
+    逐个并、并完还能碰到新的就继续（多面板图会一层层连起来），但只并「贴着」的，
+    不会把半页之外的图也拉进来。
+    """
     x0, y0, x1, y1 = bbox
-    best = None
-    for rx0, ry0, rx1, ry1 in regions:
-        if ry0 - gap <= y1 and ry1 + gap >= y0 and rx0 - gap <= x1 and rx1 + gap >= x0:
-            area = (rx1 - rx0) * (ry1 - ry0)
-            if best is None or area > best[0]:
-                best = (area, (rx0, ry0, rx1, ry1))
-    if not best:
-        return bbox
-    rx0, ry0, rx1, ry1 = best[1]
-    return (min(x0, rx0), min(y0, ry0), max(x1, rx1), max(y1, ry1))
+    changed = True
+    while changed:
+        changed = False
+        for rx0, ry0, rx1, ry1 in regions:
+            if ry0 - gap <= y1 and ry1 + gap >= y0 and rx0 - gap <= x1 and rx1 + gap >= x0:
+                nx0, ny0 = min(x0, rx0), min(y0, ry0)
+                nx1, ny1 = max(x1, rx1), max(y1, ry1)
+                if (nx0, ny0, nx1, ny1) != (x0, y0, x1, y1):
+                    x0, y0, x1, y1 = nx0, ny0, nx1, ny1
+                    changed = True
+    return (x0, y0, x1, y1)
 
 
 def page_blocks(page, regions=None):
@@ -1692,6 +1791,7 @@ def parse_pdf(path, only_page=None):
             continue
         raw_chars += len(page.get_text("text"))
         regions = _figure_regions(page)          # v12：图/表区域，用来切开绕图的段落
+        grid_regions = _figure_regions_grid(page)  # 栅格版：散点/波形图连得更全，给图注并框用
         blocks = page_blocks(page, regions)
         tables = page_tables(blocks, page)                 # 只有出现「Table N:」图注时才检测
         if tables:
@@ -1763,13 +1863,17 @@ def parse_pdf(path, only_page=None):
             if k == "caption" and regions:
                 # v12：图注挨着图/表时，把两者并进同一个矩形（用户读图注时能一眼看到对应的图）。
                 # 并完之后，被大矩形包住的小矩形要去掉，否则前端会叠着画两条色条。
-                grown = [list(_union_region(tuple(r["bbox"]), regions)) for r in rects]
-                kept = []
-                for i, g in enumerate(grown):
-                    inside = any(j != i and h[0] <= g[0] + 1 and h[1] <= g[1] + 1
-                                 and h[2] >= g[2] - 1 and h[3] >= g[3] - 1 for j, h in enumerate(grown))
-                    if not inside:
-                        kept.append([round(v, 1) for v in g])
+                grown = [list(_union_region(tuple(r["bbox"]), regions + grid_regions)) for r in rects]
+                uniq, seen_box = [], set()
+                for g in grown:
+                    key = tuple(round(v, 1) for v in g)
+                    if key in seen_box:      # 同一张图的多个小块并出同一个大框，只留一个
+                        continue
+                    seen_box.add(key)
+                    uniq.append([round(v, 1) for v in g])
+                kept = [g for g in uniq
+                        if not any(h != g and h[0] <= g[0] + 1 and h[1] <= g[1] + 1
+                                   and h[2] >= g[2] - 1 and h[3] >= g[3] - 1 for h in uniq)]
                 rects = [{"page": rects[0]["page"], "bbox": b} for b in kept] or rects
             item = {
                 "page": pno,
