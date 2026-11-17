@@ -336,6 +336,56 @@ def _figure_regions_grid(page):
     return regions
 
 
+def _absorb_labels(page, regions, gap=16.0, max_len=24, max_h=18.0):
+    """把贴着图区的短标签（坐标刻度 "5 Hz"、面板号 "a"、比例尺 "400 pA"）并进图区包围盒。
+
+    这些标签在 PDF 里是独立文本块、且常常落在绘图区左侧/下方一点，
+    不并进来的话前端画的框会从绘图墨迹开始、把标签留在框外。
+    判据只依赖「短 + 矮 + 紧贴 + 竖直方向有重叠」，不含任何版式特判。
+    """
+    if not regions:
+        return regions
+    try:
+        blocks = page.get_text("blocks")
+    except Exception:
+        return regions
+    small = []
+    for b in blocks:
+        if len(b) < 5:
+            continue
+        t = (b[4] or "").strip()
+        if not t or len(t) > max_len:
+            continue
+        bb = (float(b[0]), float(b[1]), float(b[2]), float(b[3]))
+        if bb[3] - bb[1] > max_h:
+            continue
+        small.append(bb)
+    if not small:
+        return regions
+    out = []
+    for r in regions:
+        x0, y0, x1, y1 = r
+        for _ in range(4):
+            grew = False
+            for bb in small:
+                bx0, by0, bx1, by1 = bb
+                if bx1 < x0 - gap or bx0 > x1 + gap or by1 < y0 - gap or by0 > y1 + gap:
+                    continue
+                y_ov = min(y1, by1) - max(y0, by0)
+                x_ov = min(x1, bx1) - max(x0, bx0)
+                if y_ov < 0.5 * (by1 - by0) and x_ov < 0.5 * (bx1 - bx0):
+                    continue
+                nx0, ny0 = min(x0, bx0), min(y0, by0)
+                nx1, ny1 = max(x1, bx1), max(y1, by1)
+                if (nx0, ny0, nx1, ny1) != (x0, y0, x1, y1):
+                    x0, y0, x1, y1 = nx0, ny0, nx1, ny1
+                    grew = True
+            if not grew:
+                break
+        out.append((x0, y0, x1, y1))
+    return out
+
+
 def _inside_region(bbox, regions, inset=2.0):
     x0, y0, x1, y1 = bbox
     cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
@@ -1800,7 +1850,7 @@ def parse_pdf(path, only_page=None):
             continue
         raw_chars += len(page.get_text("text"))
         regions = _figure_regions(page)          # v12：图/表区域，用来切开绕图的段落
-        grid_regions = _figure_regions_grid(page)  # 栅格版：散点/波形图连得更全，给图注并框用
+        grid_regions = _absorb_labels(page, _figure_regions_grid(page))  # 栅格版：散点/波形图连得更全，给图注并框用
         blocks = page_blocks(page, regions)
         tables = page_tables(blocks, page)                 # 只有出现「Table N:」图注时才检测
         if tables:
