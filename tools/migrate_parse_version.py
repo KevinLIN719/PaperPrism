@@ -92,7 +92,7 @@ def remap_idx(old_paras, new_paras, oi, hint=None):
     return best if bestn >= 10 else min(oi, len(new_paras) - 1)
 
 
-def migrate_file(path):
+def migrate_file(path, force=False):
     with io.open(path, encoding="utf-8") as f:
         data = json.load(f)
     parse = data.get("parse") or {}
@@ -101,7 +101,7 @@ def migrate_file(path):
     full = os.path.join(ROOT, rel)
     print("== %s  版本 %s -> %s  文件 %s" % (
         os.path.basename(path), ver, m1_parse.PARSE_VERSION, rel))
-    if ver == m1_parse.PARSE_VERSION:
+    if ver == m1_parse.PARSE_VERSION and not force:
         print("   已是当前版本，跳过")
         return False
     if not os.path.exists(full):
@@ -229,7 +229,7 @@ def main():
         print("已备份 store/ -> %s" % BACKUP_DIR)
     n = 0
     for p in todo:
-        if migrate_file(p):
+        if migrate_file(p, force=force):
             n += 1
     print("完成：升级 %d 篇" % n)
 

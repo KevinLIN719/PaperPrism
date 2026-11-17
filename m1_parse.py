@@ -437,6 +437,17 @@ def attach_dropcaps(blocks):
     return out
 
 
+def _spaced_caps(t):
+    """「T E C H N I CA L R E P O R T」这种字间加空格的页眉/横幅，不是标题。
+
+    判据：去掉空格后全大写，且单字母「词」至少 3 个（正常大写标题不会把字母拆开）。
+    """
+    words = (t or "").split()
+    if len(words) < 4:
+        return False
+    return "".join(words).isupper() and sum(1 for w in words if len(w) == 1) >= 3
+
+
 def drop_above_title(blocks):
     """PDF 第 1 页上方常粘着上一篇文章的尾巴：找到本文大标题，把标题之上的块全丢掉。"""
     if not blocks:
@@ -448,6 +459,7 @@ def drop_above_title(blocks):
     cands = [b for b in blocks
              if b["fs"] >= max(body_fs + 1.5, body_fs * 1.15)
              and not b.get("dropcap")
+             and not _spaced_caps(b["text"])
              and 8 <= len(b["text"]) <= 220
              and len(b["text"].split()) >= 2]
     if not cands:
@@ -478,8 +490,17 @@ def _overlaps(a, b, tol=1.0):
     return x > tol and y > tol
 
 
+def _same_band(a, b, tol=24.0):
+    """两个矩形是不是「同一栏内、左右边缘基本对齐」的上下两块。
+
+    有些论文的正文绕着图走（图占住一栏上半部分），同一段上半截短、下半截长；
+    直接并成一个大矩形会让前端把色条和热区画到图上。左右边缘差得多的不能并。
+    """
+    return abs(a[0] - b[0]) <= tol and abs(a[2] - b[2]) <= tol
+
+
 def merge_overlapping_rects(rects):
-    """把同一段里互相叠住的矩形并成一个大矩形（否则前端会画出两层边框）。"""
+    """把同一段里互相叠住、且左右对齐的矩形并成一个大矩形（否则前端会画出两层边框）。"""
     out = []
     for r in rects:
         cur = dict(r)
@@ -488,7 +509,8 @@ def merge_overlapping_rects(rects):
             merged = False
             rest = []
             for o in out:
-                if o["page"] == cur["page"] and _overlaps(o["bbox"], cur["bbox"]):
+                if (o["page"] == cur["page"] and _overlaps(o["bbox"], cur["bbox"])
+                        and _same_band(o["bbox"], cur["bbox"])):
                     a, b = o["bbox"], cur["bbox"]
                     cur["bbox"] = [min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3])]
                     merged = True
@@ -516,9 +538,12 @@ def coalesce_rects(rects):
         for o in out:
             if o["page"] != r["page"]:
                 continue
-            ox0, oy0, ox1, oy1 = o["bbox"]
+            ox0, oy0, _ox1, oy1 = o["bbox"]
             oh = max(oy1 - oy0, 1.0)
-            same_col = abs(x0 - ox0) <= 25 or abs(x1 - ox1) <= 25
+            # 只认同一条左边缘：v11 之前这里还允许「右边缘相近」也算同栏，结果
+            # 一篇正文绕着图走的论文（上半截窄、下半截宽）被并成一个大矩形，
+            # 色条和热区就盖到图上去了。
+            same_col = abs(x0 - ox0) <= 25
             gap = y0 - oy1
             if same_col and gap <= max(2.0, min(h, oh) * 0.9) and gap >= -1.0:
                 tgt = o
@@ -736,9 +761,6 @@ STRUCT_HEADING = ("abstract", "introduction", "related work", "related works",
                   "appendix", "references")
 
 
-# 「Figure 3. …」「Fig. 2: …」「TABLE II — …」「Table 1 | …」：编号后面必须跟标签分隔符
-CAPTION_LABEL = re.compile(r"^\s*(?:Figure|Fig\.|FIG\.|Table|TABLE)\s*(?:\d+|[IVX]+)\s*[.:|—–-]", re.A)
-
 # T1：顶层/多级编号小标题。「1. Introduction」「3.1 Residual Learning」「2 相关工作」
 # 编号最多 2 位（挡掉「41.8 Transformer」这类表格里的分数），后面必须跟标题内容。
 HEADING_NUM = re.compile(r"^\s*(\d{1,2}(?:\.\d{1,2}){0,3})\.?\s+(\S.*)$", re.S)
@@ -746,7 +768,7 @@ HEADING_NUM = re.compile(r"^\s*(\d{1,2}(?:\.\d{1,2}){0,3})\.?\s+(\S.*)$", re.S)
 HEAD_FUNCTION_WORDS = {"of", "the", "and", "in", "for", "with", "a", "an", "to", "on",
                        "or", "as", "by", "from", "via", "at", "is", "are", "vs", "vs.",
                        "its", "their", "our", "into", "over", "under", "between"}
-CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
+CJK_RE = re.compile(r"[㐀-䶿一-鿿豈-﫿]")
 
 # v10（T01）：等宽字体 = 代码清单。字体名比字号可靠得多，Scaling 的附录代码是
 # BeraSansMono 6.4pt，正文是 URWPalladioL 10pt；只看字号会把它当脚注整块丢掉。
@@ -759,7 +781,43 @@ CODE_MONO_MIN = 0.6        # 一个块里 ≥60% 字符是等宽字体，就算�
 SCORE_NUM = re.compile(r"^\s*(\d{1,2})\.(\d{2})(?!\.\d)\s")
 
 # v8：PyMuPDF 抽不出数学字体时留下的替换字符（PLOS ONE 的公式碎片「1 XNðviÞ ¼」）
-MATH_DEBRIS = re.compile(r"[ðÞ¼½¾×÷±∑∏∫√≤≥≈\ufffd]")
+MATH_DEBRIS = re.compile(r"[ðÞ¼½¾×÷±∑∏∫√≤≥≈�]")
+
+
+# 「Figure 3. …」「Fig. 2: …」「TABLE II — …」「Table 1 | …」：编号后面必须跟标签分隔符
+CAPTION_LABEL = re.compile(r"^\s*(?:Figure|Fig\.|FIG\.|Table|TABLE)\s*(?:\d+|[IVX]+)\s*(?:[.:|—–]|-(?=\s))", re.A)
+
+# 有的期刊图注编号后面不跟标点：「Figure 4 Simulated and natural synaptic transmission…」。
+# 判据见 _is_caption_loose()：小字号一律认；正文字号时，只要标签后第一个词不是
+# shows/illustrates/is… 这类谓语（正文里引用图的句子），也认。
+CAPTION_LABEL_LOOSE = re.compile(r"^\s*(?:Figure|Fig\.|FIG\.|Table|TABLE)\s*(?:\d+|[IVX]+)\s+([^\s,.;:){}\[\]]+)", re.A)
+
+# 标签后跟这些词，说明是在正文里引用图（"Figure 4 shows that …"），不是图注本身
+CAPTION_VERB = frozenset((
+    "shows", "show", "shown", "illustrates", "illustrate", "depicts", "depict",
+    "indicates", "indicate", "demonstrates", "demonstrate", "presents", "present",
+    "gives", "give", "compares", "compare", "reveals", "reveal", "reports", "report",
+    "summarizes", "summarize", "and", "or", "also", "is", "are", "was", "were",
+))
+
+
+def _is_caption_loose(text, fs, body_fs):
+    """「Figure 4 Simulated and natural…」这种不带标点的图注。"""
+    if len(text) < 30:
+        return False
+    m = CAPTION_LABEL_LOOSE.match(text)
+    if not m:
+        return False
+    raw = m.group(1)
+    # 正文里引用图：括号说明跟在编号后（「Fig. 6 (middle)…」），或者标签后跟谓语
+    # （「Table 23 shows the occupations…」）。这两种无论字号大小都不是图注。
+    if raw[:1] in ("(", "[", "“", '"'):
+        return False
+    if raw.strip(".,:;()[]").lower() in CAPTION_VERB:
+        return False
+    if fs and body_fs and fs <= body_fs * 0.96:      # 图注普遍比正文小半号
+        return True
+    return raw[:1].isupper() or raw[:1].isdigit()
 
 
 def _looks_like_score_row(t):
@@ -862,6 +920,9 @@ def kind_of(text, fs=0.0, body_fs=0.0):
     # 不是「以 Figure/Table 开头」——正文里大量句子以 "Table 3 shows that …"、
     # "Fig. 6 (middle) shows …" 开头，按前缀判会把整段正文当成图注丢掉。
     if CAPTION_LABEL.match(text):
+        return "caption"
+    # v11：无标点的图注标签（「Figure 4 Simulated and natural…」）
+    if _is_caption_loose(text, fs, body_fs):
         return "caption"
     t = text.strip()
     if len(t) < 40 and t.rstrip(":：").lower() in STRUCT_HEADING:
@@ -1327,7 +1388,7 @@ LAST_EMPTY_REASON = None
 
 # 解析规则的版本号：改了分段/分类规则就 +1，服务端据此把旧书库里的解析结果判为过期、
 # 重新解析并重新批注（否则修好的分类逻辑对已经解析过的论文不生效）。
-PARSE_VERSION = 10
+PARSE_VERSION = 11
 
 
 def _rect_of(b):
@@ -1560,6 +1621,8 @@ def parse_pdf(path, only_page=None):
             # 会让 9.0 号的图注被误判成「小于正文 0.9 倍」而整批丢掉。
             if k == "code":
                 pass                 # v10（T01）：代码块不看字号、不看句读，原样保留
+            elif k == "caption":
+                pass                 # v11：小字号图注是正文之外的独立一类，不该按脚注丢掉
             elif body_fs and pfs and pfs < body_fs * 0.9 - 0.05:
                 # 「小字 + 像引用」只在文档靠后、或已经见过 References 标题时才进 in_refs。
                 # 否则首页脚注会把整篇论文判成参考文献区（A 部分 F1）。

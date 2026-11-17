@@ -604,7 +604,8 @@ function normalizeRects(paras) {
       for (const o of out) {
         if (o.page !== r.page) continue;
         const ob = o.bbox, oh = Math.max(ob[3] - ob[1], 1);
-        const sameCol = Math.abs(b[0] - ob[0]) <= 25 || Math.abs(b[2] - ob[2]) <= 25;
+        // 只认同一条左边缘：正文绕图排时上半截窄、下半截宽，右边缘对齐也不能并
+        const sameCol = Math.abs(b[0] - ob[0]) <= 25;
         const gap = b[1] - ob[3];
         if (sameCol && gap <= Math.max(2, Math.min(h, oh) * 0.9) && gap >= -1) { tgt = o; break; }
       }

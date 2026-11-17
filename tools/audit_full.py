@@ -28,6 +28,9 @@ import pymupdf   # noqa: E402
 
 # 真·图注标签：「Figure 3.」「Table 2:」「Fig. 1 |」
 CAPTION_LABEL = re.compile(r"^\s*(?:Figure|Fig\.|Table|TABLE|FIG\.)\s*(?:\d+|[IVX]+)\s*[.:|—–\-]", re.A)
+
+# 与 m1_parse 同口径：编号后面不跟标点的图注（「Fig. 1 Distribution of…」）
+CAPTION_LABEL_LOOSE = re.compile(r"^\s*(?:Figure|Fig\.|Table|TABLE|FIG\.)\s*(?:\d+|[IVX]+)\s+[^\s,.;:){}\[\]]", re.A)
 # 正文里以 Figure/Table 开头但其实是句子：「Table 3 shows that …」
 CAPTION_SENTENCE = re.compile(r"^\s*(?:Figure|Fig\.|Table|TABLE)\s*(?:\d+|[IVX]+)\s+(?:shows?|show|presents?|"
                               r"reports?|lists?|summari[sz]es?|compares?|illustrates?|gives?|contains?|"
@@ -83,7 +86,10 @@ CJK = re.compile(r"[\u4e00-\u9fff]")
 
 
 def _is_caption_text(t):
-    return bool(CAPTION_LABEL.match(t))
+    """带图注标签。v11 起与解析层同口径：也认「Fig. 1 Distribution of…」这种不带标点的图注。"""
+    if CAPTION_LABEL.match(t):
+        return True
+    return bool(getattr(CAPTION_LABEL_LOOSE, "match", lambda _t: None)(t))
 
 
 # 作者名单行：连续的「名 姓」人名，可能带 * † ‡ 和数字角标。
