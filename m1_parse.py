@@ -235,6 +235,11 @@ def _figure_regions(page):
     return keep
 
 
+# v12c：栅格膨胀格数与图注并框间距（两者都会让框往外长，宁小不大）
+GRID_DILATE = 1
+CAP_UNION_GAP = 20.0
+
+
 def _figure_regions_grid(page):
     """这一页上「图/表占据的区域」。
 
@@ -275,8 +280,8 @@ def _figure_regions_grid(page):
     except Exception:
         pass
 
-    # 膨胀：把同一张图里间隔十几个点的面板/图例连起来
-    for _ in range(3):
+    # 膨胀：把同一张图里间隔几个点的面板/图例连起来（格数越大框越往外长）
+    for _ in range(GRID_DILATE):
         nxt = [row[:] for row in grid]
         for yy in range(ny):
             row = grid[yy]
@@ -321,9 +326,11 @@ def _figure_regions_grid(page):
             bx1, by1 = (x1 + 1) * cell, (y1 + 1) * cell
             if bx1 - bx0 < 30 or by1 - by0 < 30:
                 continue
-            if (bx1 - bx0) * (by1 - by0) < page_area * 0.008:
+            # v12c：单块阈值放宽（多面板图的一块可能只有 2000pt²），靠后面的「并排/上下」
+            # 判定与面板合并把它们并成整张图，宁小不大
+            if (bx1 - bx0) * (by1 - by0) < page_area * 0.002:
                 continue
-            if n < 40:
+            if n < 20:
                 continue
             regions.append((round(bx0, 1), round(by0, 1), round(bx1, 1), round(by1, 1)))
     return regions
@@ -338,12 +345,14 @@ def _inside_region(bbox, regions, inset=2.0):
     return False
 
 
-def _union_region(bbox, regions, gap=40.0):
+def _union_region(bbox, regions, gap=None):
     """图注挨着图/表时，把相连的图区一块并进来（用户要的「图注与图表框在一起」）。
 
     逐个并、并完还能碰到新的就继续（多面板图会一层层连起来），但只并「贴着」的，
     不会把半页之外的图也拉进来。
     """
+    if gap is None:
+        gap = CAP_UNION_GAP
     x0, y0, x1, y1 = bbox
     changed = True
     while changed:
@@ -1863,17 +1872,56 @@ def parse_pdf(path, only_page=None):
             if k == "caption" and regions:
                 # v12：图注挨着图/表时，把两者并进同一个矩形（用户读图注时能一眼看到对应的图）。
                 # 并完之后，被大矩形包住的小矩形要去掉，否则前端会叠着画两条色条。
-                grown = [list(_union_region(tuple(r["bbox"]), regions + grid_regions)) for r in rects]
-                uniq, seen_box = [], set()
-                for g in grown:
-                    key = tuple(round(v, 1) for v in g)
-                    if key in seen_box:      # 同一张图的多个小块并出同一个大框，只留一个
-                        continue
-                    seen_box.add(key)
-                    uniq.append([round(v, 1) for v in g])
-                kept = [g for g in uniq
+                # v12c：不再并成一个大 bbox（那会把图注与图之间的其它正文也圈进来，
+                # 视觉上「框过大、压到旁边文字」）。改成**多个紧贴的矩形**：
+                # 图注自己一个框 + 相邻图区各自一个框，框与框之间不留空、也不互相包含。
+                cb = [round(v, 1) for v in tuple(rects[0]["bbox"])]
+                for r in rects[1:]:           # 图注自己可能是多段 band，取整个图注的包围盒作锚
+                    b = [round(v, 1) for v in tuple(r["bbox"])]
+                    cb = [min(cb[0], b[0]), min(cb[1], b[1]), max(cb[2], b[2]), max(cb[3], b[3])]
+                near, seen_box = [cb], {tuple(cb)}
+                pool = [[round(v, 1) for v in rr] for rr in regions + grid_regions]
+
+                def _related(a, b, gap=CAP_UNION_GAP + 4):
+                    y_ov = min(a[3], b[3]) - max(a[1], b[1])
+                    x_ov = min(a[2], b[2]) - max(a[0], b[0])
+                    same_row = y_ov >= 0.6 * min(a[3] - a[1], b[3] - b[1])
+                    same_col = x_ov >= 0.6 * min(a[2] - a[0], b[2] - b[0]) and -gap <= y_ov
+                    return same_row or same_col
+
+                # 先从图注出发收一圈，再做传递闭包（多面板图可能有好几层，靠相邻块连起来）
+                added = True
+                while added:
+                    added = False
+                    for g in pool:
+                        key = tuple(g)
+                        if key in seen_box:
+                            continue
+                        if any(_related(g, h) for h in near):
+                            seen_box.add(key)
+                            near.append(g)
+                            added = True
+                # 图区内部再合并（同一张图的多块面板），但**绝不和图注 bbox 合并**
+                figs = [g for g in near[1:]]
+                merged = True
+                while merged:
+                    merged = False
+                    for i in range(len(figs)):
+                        for j in range(i + 1, len(figs)):
+                            a, b = figs[i], figs[j]
+                            if (a[0] - 40 <= b[2] and a[2] + 40 >= b[0]
+                                    and a[1] - 34 <= b[3] and a[3] + 34 >= b[1]):
+                                figs[i] = [min(a[0], b[0]), min(a[1], b[1]),
+                                           max(a[2], b[2]), max(a[3], b[3])]
+                                figs.pop(j)
+                                merged = True
+                                break
+                        if merged:
+                            break
+                near = [cb] + figs
+                kept = [g for g in near
                         if not any(h != g and h[0] <= g[0] + 1 and h[1] <= g[1] + 1
-                                   and h[2] >= g[2] - 1 and h[3] >= g[3] - 1 for h in uniq)]
+                                   and h[2] >= g[2] - 1 and h[3] >= g[3] - 1 for h in near)]
                 rects = [{"page": rects[0]["page"], "bbox": b} for b in kept] or rects
             item = {
                 "page": pno,
