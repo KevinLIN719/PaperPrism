@@ -336,7 +336,7 @@ def _figure_regions_grid(page):
     return regions
 
 
-def _absorb_labels(page, regions, gap=16.0, max_len=24, max_h=18.0):
+def _absorb_labels(page, regions, gap=16.0, max_len=24, max_h=22.0):
     """把贴着图区的短标签（坐标刻度 "5 Hz"、面板号 "a"、比例尺 "400 pA"）并进图区包围盒。
 
     这些标签在 PDF 里是独立文本块、且常常落在绘图区左侧/下方一点，
@@ -354,12 +354,16 @@ def _absorb_labels(page, regions, gap=16.0, max_len=24, max_h=18.0):
         if len(b) < 5:
             continue
         t = (b[4] or "").strip()
-        if not t or len(t) > max_len:
+        if not t:
             continue
         bb = (float(b[0]), float(b[1]), float(b[2]), float(b[3]))
-        if bb[3] - bb[1] > max_h:
+        w, h = bb[2] - bb[0], bb[3] - bb[1]
+        if w <= 0 or h <= 0:
             continue
-        small.append(bb)
+        if h <= max_h and len(t) <= max_len:
+            small.append(bb)          # 指标题：横排刻度、面板号
+        elif w <= 22 and h >= 30 and len(t) <= 80:
+            small.append(bb)          # 指标题：竖排（旋转 90°）的坐标轴变量名
     if not small:
         return regions
     out = []
