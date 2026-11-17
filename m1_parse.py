@@ -841,6 +841,9 @@ def coalesce_rects(rects):
 
 SENT_END = (".", "?", "!", ":", "\u3002", "\uff1f", "\uff01", "\uff1a", "\uff1b", "\u201d", "\u2019")
 NOTE_MARK_TAIL = re.compile(r"[\d\u00b9\u00b2\u00b3\u2070-\u2079]{1,3}$")
+# 跨页/跨图接排的下半句也可能以缩写括注开头：「…shows the scanning electron microscopy」
+# +「(SEM) image of the selective release…」（aay5120 第 6 页末段接到第 8 页）。
+CONT_PAREN = re.compile(r"^\([A-Za-z][A-Za-z0-9 /.\u2013-]{0,12}\)\s+[a-z]")
 # v9 的两个开关：只为「同一把尺子量 v8」留的（tools/as_v8.py 把它俩置 False）
 ENDS_SENTENCE_NOTE_AWARE = True
 SHORT_PROSE_JOIN = True
@@ -859,6 +862,21 @@ def _ends_sentence(text):
     if not s:
         return False
     return s.endswith(SENT_END)
+
+
+def _continuation_head(text):
+    """跨页接排的「下半句」开头：小写单词，或 "(SEM) image…" 这类缩写括注后接小写词。
+
+    大写开头的段落通常是新段落/新小标题，不能因为上一段没说完就焊上去。
+    """
+    t = (text or "").lstrip()
+    if not t:
+        return False
+    if t[:1].isalpha():
+        ok = t[:1].islower()
+    else:
+        ok = bool(CONT_PAREN.match(t))
+    return ok and prose_score(t) > 0.55
 
 
 def _is_code_block(b):
@@ -1671,7 +1689,7 @@ LAST_EMPTY_REASON = None
 
 # 解析规则的版本号：改了分段/分类规则就 +1，服务端据此把旧书库里的解析结果判为过期、
 # 重新解析并重新批注（否则修好的分类逻辑对已经解析过的论文不生效）。
-PARSE_VERSION = 12
+PARSE_VERSION = 13
 
 
 def _rects_of(b):
@@ -2050,22 +2068,30 @@ def parse_pdf(path, only_page=None):
 
 
 def merge_across_pages(paras):
-    """上一页最后一段没说完、下一页开头是小写，就接成一段。"""
+    """上一页最后一段没说完、下一页开头是它的下半句，就接成一段。
+
+    图表占整页时，中间只剩图注段（v13 的 aay5120：第 6 页末段 → 第 8 页首段），
+    所以允许跨过连着的图注去找下半句，最多跳 3 页；中间只要夹了任何别的类型
+    （标题/新章节/正文）就不接，免得把两段不相干的话焊起来。
+    """
     out = []
+    last_body = -1
     for p in paras:
-        if out:
-            a = out[-1]
-            same_flow = (a["kind"] == p["kind"] == "body"
-                         and not a.get("page_end")
-                         and p["page"] == (a.get("page_end") or a["page"]) + 1)
-            unfinished = not _ends_sentence(a["text"])
-            prose = p["text"][:1].isalpha() and p["text"][:1].islower() and prose_score(p["text"]) > 0.55
-            if same_flow and unfinished and prose:
+        if p["kind"] == "body" and last_body >= 0:
+            a = out[last_body]
+            gap = p["page"] - a["page"]
+            between = out[last_body + 1:]
+            if (not a.get("page_end") and 1 <= gap <= 3
+                    and all(b["kind"] == "caption" for b in between)
+                    and not _ends_sentence(a["text"])
+                    and _continuation_head(p["text"])):
                 a["text"] = a["text"].rstrip() + " " + p["text"]
                 a["page_end"] = p["page"]
                 a["rects"] = a.get("rects", []) + p.get("rects", [])
                 continue
         out.append(dict(p))
+        if p["kind"] == "body":
+            last_body = len(out) - 1
     return out
 
 
