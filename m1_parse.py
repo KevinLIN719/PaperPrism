@@ -35,6 +35,40 @@ LIGATURES = {"\ufb00": "ff", "\ufb01": "fi", "\ufb02": "fl", "\ufb03": "ffi",
 ARXIV_STAMP = re.compile(r"^arXiv:\d{4}\.\d{4,5}v\d+\s*(\[[^\]]+\])?\s*\d{1,2}\s+\w+\s+\d{4}\s*", re.I)
 
 
+# Adobe Symbol / SymbolGreek 的私用编码仅在已知符号字体内转换。
+SYMBOL_GREEK = dict(zip("ABGDEZHQIKLMNXOPRSTUFCYWabgdezhqiklmnxoprstufcyw",
+                       "ΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩαβγδεζηθικλμνξοπρστυφχψω"))
+SYMBOL_GREEK.update({"J": "ϑ", "j": "ϕ", "V": "ς", "v": "ϖ"})
+SYMBOL_MATH = {0xA3: "≤", 0xA5: "∞", 0xB1: "±", 0xB3: "≥", 0xB4: "×",
+               0xB8: "÷", 0xB9: "≠", 0xBB: "≈", 0xD6: "√", 0xE5: "∑", 0xF2: "∫"}
+
+
+def normalize_math_spans(spans, mark_subscripts=True, subscript_patches=None):
+    """保留位置不变，只还原已知字体符号和明确的短下标。"""
+    for index, span in enumerate(spans):
+        font = re.sub(r"^[A-Z]{6}\+", "", span.get("font", ""))
+        text = span.get("text", "")
+        if re.fullmatch(r"Symbol(?:Greek)?(?:[-, ]?(?:Bold|Italic|Oblique|Regular))*", font, re.I):
+            text = "".join(SYMBOL_GREEK.get(chr(ord(c)-0xF000), SYMBOL_MATH.get(ord(c)-0xF000, c))
+                           if 0xF000 <= ord(c) <= 0xF0FF else c for c in text)
+        if index:
+            base = spans[index-1]
+            size = base.get("size", 0)
+            origin = span.get("origin", (0, 0))
+            before = base.get("origin", (0, 0))
+            if (re.fullmatch(r"[A-Za-zΑ-ω]", base.get("text", ""))
+                    and re.fullmatch(r"[A-Za-z0-9]{1,4}", text)
+                    and size and span.get("size", size) < size * .85
+                    and size * .08 < origin[1]-before[1] < size * .45
+                    and -.5 <= span["bbox"][0]-base["bbox"][2] <= size * .25):
+                if mark_subscripts:
+                    text = "_{" + text + "}"
+                elif subscript_patches is not None:
+                    subscript_patches.append((base['text'] + text, base['text'] + "_{" + text + "}", span['bbox']))
+        span["text"] = text
+    return spans
+
+
 def clean_text(t):
     """统一花体连字、去掉 arXiv 角标。"""
     for k, v in LIGATURES.items():
@@ -421,13 +455,19 @@ def _union_region(bbox, regions, gap=None):
     return (x0, y0, x1, y1)
 
 
-def page_blocks(page, regions=None):
+def page_blocks(page, regions=None, math_subscripts=None):
     """返回这一页的文本块：bbox、文本、行数、平均行高。
 
     PyMuPDF 的一个 block 有时会把相邻两段并在一起，这里按行间距再切一次：
     行距明显大于本块中位数的地方，认为是一处段首。
     """
     d = page.get_text("dict")
+    for block in d["blocks"]:
+        for line in block.get("lines", []):
+            patches = []
+            normalize_math_spans(line.get("spans", []), mark_subscripts=False, subscript_patches=patches)
+            if math_subscripts is not None:
+                math_subscripts.extend((page.number + 1, *patch) for patch in patches)
     H = page.rect.height
     if regions is None:
         regions = _figure_regions(page)
@@ -1624,12 +1664,27 @@ def _unfinished_tail(text):
     return True
 
 
+def _special_continuation(prev_text, text):
+    """数字引用或被 PDF 字形拆开的根式仍属于未结束的正文句子。"""
+    # (13, 24). Suction… 中的句号结束上一句，并非新段编号。
+    citation = re.match(r"^\(\d+(?:\s*[,;–-]\s*\d+)*\)\.\s+[A-Z]", text.lstrip())
+    if citation:
+        return True
+    # 根号横线和公式字形常含零宽空格、窄空格，不能以大写变量判新段。
+    compact_tail = re.sub(r"[\s\u200b\u200c\u200d_]+", "", prev_text)
+    compact_head = re.sub(r"[\s\u200b\u200c\u200d_]+", "", text)
+    return (compact_tail.endswith("√")
+            and bool(re.match(r"^[A-Za-z][A-Za-z0-9/⁄∕]*[/.]", compact_head)))
+
+
 def _continues_previous(prev_text, text):
     """后块是不是前块的续写。"""
     s = (prev_text or "").rstrip()
     t = (text or "").lstrip()
     if not t:
         return False
+    if _special_continuation(s, t):
+        return True
     # a) 小写开头 —— 句子明显没断开
     if t[:1].isalpha() and t[:1].islower():
         return True
@@ -1689,7 +1744,8 @@ LAST_EMPTY_REASON = None
 
 # 解析规则的版本号：改了分段/分类规则就 +1，服务端据此把旧书库里的解析结果判为过期、
 # 重新解析并重新批注（否则修好的分类逻辑对已经解析过的论文不生效）。
-PARSE_VERSION = 13
+PARSE_VERSION = 15
+GEOMETRY_VERSION = 2
 
 
 def _rects_of(b):
@@ -1699,6 +1755,96 @@ def _rects_of(b):
 
 
 # ---------------------------------------------------------------- 表格
+
+def table_caption_rects(page, text):
+    """用表注、同宽细横线和数字行定位简式表格，不借用邻栏图形。
+
+    仅在几何与文字证据齐备时覆盖旧图区；不改变正文切段或段号。
+    """
+    if not re.match(r"^Table\s+(?:\d+|[IVX]+)\b", text, re.I):
+        return None
+    norm = lambda s: re.sub(r"\s+", "", s).lower()
+    head = norm(text)[:60]
+    blocks = page.get_text("blocks")
+    captions = [b for b in blocks if head in norm(b[4])]
+    if len(captions) != 1:
+        return None
+    cap = pymupdf.Rect(captions[0][:4])
+    rules = []
+    for drawing in page.get_drawings():
+        # 逐条读取水平线；路径总框可能混入其它非表格图形。
+        for item in drawing.get("items", []):
+            if item[0] == "re" and item[1].height <= 2.5:
+                r = item[1]
+                a, b = pymupdf.Point(r.x0,r.y0),pymupdf.Point(r.x1,r.y0)
+            elif item[0] == "l":
+                a, b = item[1:3]
+            else:
+                continue
+            if abs(a.y-b.y) > 1.5 or abs(a.x-b.x) < 60:
+                continue
+            x0, x1 = sorted((a.x,b.x))
+            width = x1-x0
+            if abs(x0-cap.x0) > 12 or not .65*cap.width <= width <= 1.3*cap.width:
+                continue
+            rules.append((x0,(a.y+b.y)/2,x1))
+    choices = []
+    for top in rules:
+        for bottom in rules:
+            if bottom[1]-top[1] < 30 or abs(top[0]-bottom[0]) > 4 or abs(top[2]-bottom[2]) > 4:
+                continue
+            below = cap.y1 <= top[1] <= cap.y1+85
+            above = cap.y0-70 <= bottom[1] <= cap.y0
+            if not (below or above):
+                continue
+            x0, x1 = min(top[0],bottom[0]), max(top[2],bottom[2])
+            lo, hi = (cap.y1,bottom[1]+2) if below else (top[1]-30,cap.y0)
+            rows = [b for b in blocks if b[0] >= x0-3 and b[2] <= x1+3
+                    and b[1] >= lo-1 and b[3] <= hi+1]
+            content = "\n".join(b[4] for b in rows)
+            if len(re.findall(r"\b\d+(?:\.\d+)?\b",content)) < 6:
+                continue
+            # 不跨过长篇正文去找远处的横线。
+            if any(len(b[4]) > 500 and len(re.findall(r"\b\d",b[4])) < 4 for b in rows):
+                continue
+            y0 = min([top[1]]+[b[1] for b in rows])
+            y1 = max([bottom[1]]+[b[3] for b in rows])
+            if y1-y0 > page.rect.height*.5:
+                continue
+            gap = top[1]-cap.y1 if below else cap.y0-bottom[1]
+            choices.append((gap,-(y1-y0),[round(x0,1),round(y0-1,1),round(x1,1),round(y1+1,1)]))
+    if not choices:
+        return None
+    choices.sort()
+    return [list(map(lambda v: round(v,1),cap)),choices[0][2]]
+
+
+def refresh_caption_geometry(path, parsed):
+    """按同页同文更新所有图表定位，不失效摘要／批注或更改段号。"""
+    if parsed.get("geometry_version",0) >= GEOMETRY_VERSION:
+        return False
+    old_captions = [p for p in parsed.get("paras",[]) if p.get("kind") == "caption"]
+    norm = lambda text: re.sub(r'\s+', '',text)
+    # 解析器的页面尺寸字典可能被内存缓存引用，升级坐标不能污染其它论文。
+    sizes, cols = dict(LAST_PAGE_SIZES),dict(LAST_PAGE_COLS)
+    try:
+        fresh = [p for p in parse_pdf(path) if p["kind"] == "caption"] if old_captions else []
+    finally:
+        LAST_PAGE_SIZES.clear()
+        LAST_PAGE_SIZES.update(sizes)
+        LAST_PAGE_COLS.clear()
+        LAST_PAGE_COLS.update(cols)
+    for p in old_captions:
+        matches = [q for q in fresh if q["page"] == p["page"] and norm(q["text"]) == norm(p["text"])]
+        if len(matches) != 1:
+            continue
+        p["rects"] = matches[0]["rects"]
+        if matches[0].get("figure_rects"):
+            p["figure_rects"] = matches[0]["figure_rects"]
+        else:
+            p.pop("figure_rects",None)
+    parsed["geometry_version"] = GEOMETRY_VERSION
+    return True
 
 # 表格图注：「Table 3: …」「TABLE II …」；只在页面上出现这种块时才去找表格
 TABLE_CAP = re.compile(r"^\s*(?:Table|TABLE)\s*(?:\d+|[IVX]+)\s*[:.]", re.A)
@@ -1854,6 +2000,7 @@ def detect_body_fs(doc):
 
 
 def parse_pdf(path, only_page=None):
+    math_subscripts = []
     global HYPHEN_VOCAB, LAST_EMPTY_REASON
     LAST_EMPTY_REASON = None
     doc = pymupdf.open(path)
@@ -1873,7 +2020,7 @@ def parse_pdf(path, only_page=None):
         raw_chars += len(page.get_text("text"))
         regions = _figure_regions(page)          # v12：图/表区域，用来切开绕图的段落
         grid_regions = _absorb_labels(page, _figure_regions_grid(page))  # 栅格版：散点/波形图连得更全，给图注并框用
-        blocks = page_blocks(page, regions)
+        blocks = page_blocks(page, regions, math_subscripts)
         tables = page_tables(blocks, page)                 # 只有出现「Table N:」图注时才检测
         if tables:
             blocks = drop_table_blocks(blocks, tables)     # 表格单元格不当正文段落
@@ -1941,7 +2088,10 @@ def parse_pdf(path, only_page=None):
             if k == "body" and not body_fs:
                 body_fs = para.get("fs") or 0.0
             rects = para["rects"]
-            if k == "caption" and regions:
+            table_rects = table_caption_rects(page,t) if k == "caption" else None
+            if table_rects:
+                rects = [{"page":pno,"bbox":b} for b in table_rects]
+            elif k == "caption" and regions:
                 # v12：图注挨着图/表时，把两者并进同一个矩形（用户读图注时能一眼看到对应的图）。
                 # 并完之后，被大矩形包住的小矩形要去掉，否则前端会叠着画两条色条。
                 # v12d：图注框 = 「图注文字自己的矩形」+「相邻图区各自的矩形」。
@@ -1954,7 +2104,18 @@ def parse_pdf(path, only_page=None):
                 for b in bands[1:]:
                     cb = [min(cb[0], b[0]), min(cb[1], b[1]),
                           max(cb[2], b[2]), max(cb[3], b[3])]
-                pool = [[round(v, 1) for v in rr] for rr in regions + grid_regions]
+                # 栅格连通块可能经页眉装饰串到相邻图表。一个图区若覆盖其它
+                # 图表的真实图注文字，就不能整块归到当前图注，否则其热区会抢点击。
+                norm = lambda text: re.sub(r'\s+', '',text).lower()
+                other_captions = [pymupdf.Rect(b[:4]) for b in page.get_text("blocks")
+                                  if re.match(r'^\s*(?:Fig(?:ure)?\.?|Table)\s*\d+\b',b[4],re.I)
+                                  and norm(t)[:50] not in norm(b[4])]
+                pool = []
+                for rr in regions + grid_regions:
+                    region = pymupdf.Rect(rr)
+                    if any((region & other).get_area() > other.get_area()*.1 for other in other_captions):
+                        continue
+                    pool.append([round(v,1) for v in rr])
 
                 def _cut(g, hole):
                     """从矩形 g 里挖掉 hole（最多切成四块，太碎的直接丢）。"""
@@ -2045,6 +2206,8 @@ def parse_pdf(path, only_page=None):
                 "rects": rects,
                 "text": para["text"],
             }
+            if table_rects:
+                item["figure_rects"] = [{"page":pno,"bbox":table_rects[1]}]
             if k == "heading":
                 item["level"] = heading_level(para["text"])    # T2
             result.append(item)
@@ -2055,6 +2218,10 @@ def parse_pdf(path, only_page=None):
         merge_across_pages(drop_toc_headings(result)))))
     for para in final:
         para["rects"] = merge_overlapping_rects(coalesce_rects(para.get("rects", [])))
+        for page_no, original, marked, bbox in math_subscripts:
+            if any(r['page'] == page_no and r['bbox'][0] <= bbox[0] + 1 and r['bbox'][2] >= bbox[2] - 1
+                   and r['bbox'][1] <= bbox[1] + 1 and r['bbox'][3] >= bbox[3] - 1 for r in para['rects']):
+                para['text'] = re.sub(r'(?<![\w])' + re.escape(original) + r'(?![\w])', marked, para['text'])
         para["chars"] = len(para.get("text") or "")    # 任务书契约字段
     # T6：让服务端能区分「本来就是空的」和「解不出来」
     if not final:

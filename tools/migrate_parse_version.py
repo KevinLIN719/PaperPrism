@@ -46,6 +46,7 @@ def build_parse(full):
             "kind": p["kind"],
             "chars": len(p["text"]),
             "rects": p.get("rects", []),
+            **({"figure_rects":p["figure_rects"]} if p.get("figure_rects") else {}),
             "text": p["text"],
             "anchor": {"idx": i, "head": " ".join(words[:8])},
         })
@@ -53,6 +54,7 @@ def build_parse(full):
         "pages": max((p["page"] for p in out), default=0),
         "count": len(out),
         "parse_version": m1_parse.PARSE_VERSION,
+        "geometry_version": m1_parse.GEOMETRY_VERSION,
         "page_sizes": m1_parse.LAST_PAGE_SIZES,
         "paras": out,
     }

@@ -3,7 +3,7 @@
   "papers": {
     "papers_audit/c2_aps_ligo.pdf": {
       "paras": 69,
-      "body_chars": 65176
+      "body_chars": 65200
     },
     "papers_audit/c1_acl_bart.pdf": {
       "paras": 126,
@@ -11,11 +11,11 @@
     },
     "papers_audit/c5_llama2.pdf": {
       "paras": 523,
-      "body_chars": 167564
+      "body_chars": 167585
     },
     "papers/resnet_1512.03385.pdf": {
       "paras": 87,
-      "body_chars": 28343
+      "body_chars": 28349
     },
     "papers/ScalingOnlineExploration_2610.22496.pdf": {
       "paras": 295,
