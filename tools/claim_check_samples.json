@@ -1,0 +1,30 @@
+{
+  "description": "人工构造的支持性边界样例，预期标签不是论文事实认证",
+  "samples": [
+    {
+      "claim": "在数据集A上，X准确率为80%，基线为70%。",
+      "source": "On dataset A, method X achieved 80% accuracy and the baseline achieved 70%. Evaluation used 100 samples. We hypothesize that mechanism M explains this improvement; this mechanism has not been experimentally tested.",
+      "expected": "支持"
+    },
+    {
+      "claim": "X在所有数据集上都优于基线。",
+      "source": "On dataset A, method X achieved 80% accuracy and the baseline achieved 70%. Evaluation used 100 samples. We hypothesize that mechanism M explains this improvement; this mechanism has not been experimentally tested.",
+      "expected": "部分支持"
+    },
+    {
+      "claim": "在数据集A上，X准确率为70%，基线为80%。",
+      "source": "On dataset A, method X achieved 80% accuracy and the baseline achieved 70%. Evaluation used 100 samples. We hypothesize that mechanism M explains this improvement; this mechanism has not been experimentally tested.",
+      "expected": "不支持"
+    },
+    {
+      "claim": "X的训练耗时为2小时。",
+      "source": "On dataset A, method X achieved 80% accuracy and the baseline achieved 70%. Evaluation used 100 samples. We hypothesize that mechanism M explains this improvement; this mechanism has not been experimentally tested.",
+      "expected": "信息不足"
+    },
+    {
+      "claim": "机制M已经通过实验被证明是性能提高的原因。",
+      "source": "On dataset A, method X achieved 80% accuracy and the baseline achieved 70%. Evaluation used 100 samples. We hypothesize that mechanism M explains this improvement; this mechanism has not been experimentally tested.",
+      "expected": "不支持"
+    }
+  ]
+}

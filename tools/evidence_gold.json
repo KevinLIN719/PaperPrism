@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "scope": "开发助手对照真实论文建立的固定金标，非独立盲测；修改后的错误主张用于测试拦截能力，不代表论文原话。",
+  "text_samples": [
+    {"id":"resnet-number-correct","path":"papers/resnet_1512.03385.pdf","source_hint":"Our ensemble has 3.57% top-5 error","claim":"作者的集成模型在ImageNet测试集上的top-5错误率为3.57%。","expected":"支持","rationale":"指标、数据集、测试集和集成模型限定均保留。"},
+    {"id":"resnet-number-wrong","path":"papers/resnet_1512.03385.pdf","source_hint":"Our ensemble has 3.57% top-5 error","claim":"作者的集成模型在ImageNet测试集上的top-5错误率为3.75%。","expected":"不支持","rationale":"3.75与原文3.57矛盾。"},
+    {"id":"resnet-metric-wrong","path":"papers/resnet_1512.03385.pdf","source_hint":"Our ensemble has 3.57% top-5 error","claim":"作者的集成模型在ImageNet测试集上的top-1错误率为3.57%。","expected":"不支持","rationale":"将top-5偷换为top-1。"},
+    {"id":"resnet-cost-absent","path":"papers/resnet_1512.03385.pdf","source_hint":"Our ensemble has 3.57% top-5 error","claim":"该集成模型训练耗时恰好两小时。","expected":"信息不足","rationale":"该段未提供工时，不将单段不足扩大为整篇未提供。"},
+    {"id":"resnet-hypothesis-kept","path":"papers/resnet_1512.03385.pdf","source_hint":"We hypothesize that it is easier to optimize the residual mapping","claim":"作者假设残差映射比原始的无参考映射更易优化。","expected":"支持","rationale":"保留hypothesize的假说强度。"},
+    {"id":"resnet-hypothesis-overstated","path":"papers/resnet_1512.03385.pdf","source_hint":"We hypothesize that it is easier to optimize the residual mapping","claim":"残差映射更易优化，而且作者已对所有网络给出严格数学证明。","expected":"部分支持","rationale":"前半有假说依据，后半扩大强度与范围，不能整体支持。"},
+    {"id":"smp-material-correct","path":"papers/imported/aay5120.pdf","source_hint":"with a mass ratio of 81:46","claim":"制备时将环氧单体E44与固化剂JEFFAMINE D-230按质量比81:46混合。","expected":"支持","rationale":"配方材料、次序与质量比对应方法段。"},
+    {"id":"smp-material-reversed","path":"papers/imported/aay5120.pdf","source_hint":"with a mass ratio of 81:46","claim":"E44与JEFFAMINE D-230的质量比为46:81。","expected":"不支持","rationale":"反转了原文材料对应的比值。"},
+    {"id":"smp-temperature-wrong","path":"papers/imported/aay5120.pdf","source_hint":"with a mass ratio of 81:46","claim":"作者在25°C下将E44与JEFFAMINE D-230混合。","expected":"不支持","rationale":"原文混合条件为65°C。"},
+    {"id":"smp-price-absent","path":"papers/imported/aay5120.pdf","source_hint":"with a mass ratio of 81:46","claim":"每个夹爪的材料成本为5元人民币。","expected":"信息不足","rationale":"方法段配方不提供单件成本。"},
+    {"id":"smp-force-correct","path":"papers/imported/aay5120.pdf","source_hint":"the maximum grip force of 34.8 N","claim":"在100 μm/s夹持速度下，最大夹持力为34.8 N。","expected":"支持","rationale":"数值、单位及速度条件均保留。"},
+    {"id":"smp-force-unit-wrong","path":"papers/imported/aay5120.pdf","source_hint":"the maximum grip force of 34.8 N","claim":"在100 μm/s夹持速度下，最大夹持力为34.8 kPa。","expected":"不支持","rationale":"将力N偷换为压强kPa。"}
+  ],
+  "figure_samples": [
+    {"id":"curve-correct","sample":"curve-resnet-fig1","field":"observations","text":"在CIFAR-10上，56层普通网络的训练误差高于20层普通网络。","expected":"支持","rationale":"原图左侧训练曲线和图注一致。"},
+    {"id":"curve-direction-reversed","sample":"curve-resnet-fig1","field":"observations","text":"在CIFAR-10上，56层普通网络的训练误差低于20层普通网络。","expected":"不支持","rationale":"反转比较方向。"},
+    {"id":"bars-values-correct","sample":"bars-smp-fig3cd","field":"observations","text":"图3C钢管为171.7 N，钢立方体为95.2 N；图3D光滑玻璃为113.9 kPa，粗糙玻璃为81.7 kPa。","expected":"支持","rationale":"对照四个柱、照片对象与轴单位。"},
+    {"id":"bars-extremum-wrong","sample":"bars-smp-fig3cd","field":"observations","text":"图3C中钢立方体的夹持力最高。","expected":"不支持","rationale":"最高为第四柱钢管，不是第三柱钢立方体。"},
+    {"id":"table-cells-correct","sample":"table-resnet-table2","field":"observations","text":"34层plain的top-1错误率为28.54%，34层ResNet为25.03%。","expected":"支持","rationale":"行列和指标含义均正确。"},
+    {"id":"table-metric-reversed","sample":"table-resnet-table2","field":"observations","text":"34层plain的top-1准确率为28.54%，34层ResNet为25.03%。","expected":"不支持","rationale":"单元格数值正确但错误率被偷换为准确率。"},
+    {"id":"architecture-connection-correct","sample":"architecture-transformer-fig1","field":"observations","text":"编码器输出接入解码器中未加掩码的Multi-Head Attention子层。","expected":"支持","rationale":"箭头到右侧中间注意力模块。"},
+    {"id":"architecture-connection-wrong","sample":"architecture-transformer-fig1","field":"observations","text":"编码器输出直接接入解码器底部的Masked Multi-Head Attention子层。","expected":"不支持","rationale":"错误连接右侧底部掩码注意力，原图箭头接入中间模块。"}
+  ]
+}

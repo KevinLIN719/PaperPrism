@@ -1,0 +1,100 @@
+{
+  "version": 2,
+  "samples": [
+    {
+      "id": "table-science-table1",
+      "type": "结果表",
+      "path": "demo_papers/science.1133687.pdf",
+      "page": 4,
+      "bbox": [35,145,381,300],
+      "caption_prefix": "Table 1.",
+      "checks": [
+        "三列分别为Baseline 1、Baseline 2和Model-driven algorithm，不将行列错配",
+        "Before damage和After damage每种算法均各30次（每阶段三种算法合计90次）；不把动作次数16当样本数",
+        "损坏后平均模型误差分别5.60±2.98、4.55±3.22、2.17±0.55 cm，越低越好",
+        "表注定义均值±SD；不把标准差当显著性证据，也不编造损坏后成功率"
+      ],
+      "sha256": "f73d1ffb2a154eb78994502ce946c21e63b5b89295f290f2cdd8a0ab8219bb99"
+    },
+    {
+      "id": "curve-resnet-fig1",
+      "type": "曲线图",
+      "path": "papers/resnet_1512.03385.pdf",
+      "page": 1,
+      "bbox": [
+        304,
+        210,
+        549,
+        305
+      ],
+      "caption_prefix": "Figure 1.",
+      "checks": [
+        "CIFAR-10；20层与56层普通网络",
+        "左为训练误差、右为测试误差；纵轴误差百分比，越低越好",
+        "更深的普通网络训练误差更高，不能将问题解释成单纯过拟合",
+        "本图没有ResNet曲线，不把结果扩展为残差网络的直接证据"
+      ],
+      "sha256": "1e0651b6810ecba34a3dbc5b5b0209226f889004607c1f203540a48d64e5a93a"
+    },
+    {
+      "id": "bars-smp-fig3cd",
+      "type": "柱状图",
+      "path": "papers/imported/aay5120.pdf",
+      "page": 5,
+      "bbox": [
+        82,
+        286,
+        514,
+        460
+      ],
+      "caption_prefix": "Fig. 3.",
+      "checks": [
+        "C为夹持力N；D为归一化夹持力kPa，不混淆单位",
+        "C钢管171.7N，高于钢立方体95.2N；D光滑玻璃113.9kPa高于粗糙玻璃81.7kPa",
+        "C夹持速度100μm/s、嵌入深度7.5mm；D条件单独解释",
+        "不把未定义误差条解释成确定的标准差或显著性；不将粗糙度与夹持力关系普遍化"
+      ],
+      "sha256": "8bc87b0e9c4620353eedd5768b39b685203c5ebeef2285656dd60124cac5385b"
+    },
+    {
+      "id": "table-resnet-table2",
+      "type": "结果表",
+      "path": "papers/resnet_1512.03385.pdf",
+      "page": 5,
+      "bbox": [
+        88,
+        438,
+        247,
+        484
+      ],
+      "caption_prefix": "Table 2.",
+      "checks": [
+        "ImageNet验证集，top-1错误率%，10-crop测试；越低越好",
+        "18层：plain 27.94、ResNet 27.88；34层：plain 28.54、ResNet 25.03",
+        "34层ResNet较34层plain低3.51个百分点，不写成准确率或相对百分比",
+        "相同层数比较无额外参数；本表不直接证明其他数据集或所有模型都改善"
+      ],
+      "sha256": "1e0651b6810ecba34a3dbc5b5b0209226f889004607c1f203540a48d64e5a93a"
+    },
+    {
+      "id": "architecture-transformer-fig1",
+      "type": "架构图",
+      "path": "papers/attention_1706.03762.pdf",
+      "page": 3,
+      "bbox": [
+        186,
+        66,
+        426,
+        402
+      ],
+      "caption_prefix": "Figure 1:",
+      "checks": [
+        "左编码器、右解码器；两侧重复N次",
+        "解码器包括masked self-attention与连接编码器输出的交叉注意力",
+        "嵌入加入位置编码，输出通过linear与softmax",
+        "不罗列缺坐标轴等无关信息；不以架构示意图证明准确率提升"
+      ],
+      "sha256": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697"
+    }
+  ]
+}

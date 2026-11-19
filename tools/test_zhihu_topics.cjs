@@ -1,0 +1,10 @@
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+const html=fs.readFileSync('web/reader.html','utf8');
+const start=html.indexOf('function zhQueryBlock('),end=html.indexOf('\nfunction renderZhihu(',start);
+const context={escapeHtml:value=>String(value ?? '').replaceAll('<','&lt;'),zhTitle:value=>value,zhType:value=>value};
+vm.createContext(context);vm.runInContext(html.slice(start,end),context);
+const empty=context.zhQueryBlock({q:'残差学习 复现',topic_name:'复现困难',url:'https://www.zhihu.com/search'});
+assert(empty.includes('复现困难'));assert(empty.includes('去知乎搜'));assert(empty.includes('本次未找到'));
+const legacy=context.zhQueryBlock({q:'残差学习',items:[]});assert(legacy.includes('历史检索'));
+const error=context.zhQueryBlock({q:'实验',topic_name:'实验设计',error:'额度不足'});assert(error.includes('实验设计'));assert(error.includes('额度不足'));
+console.log('PASS topic headings, manual search, empty result, historical cache and errors');
