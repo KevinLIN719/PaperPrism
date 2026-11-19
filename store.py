@@ -26,6 +26,11 @@ import time
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 STORE_DIR = os.path.join(ROOT, "store")
+_REMOVED_RECORDS = set()
+
+
+def allow_updates(sha):
+    _REMOVED_RECORDS.discard(sha)
 
 
 def _ensure_dir():
@@ -64,6 +69,8 @@ def load(sha):
 
 
 def save(sha, data):
+    if sha in _REMOVED_RECORDS:
+        raise ValueError('论文记录已删除，本次后台结果不再保存')
     _ensure_dir()
     data = dict(data)
     data["sha"] = sha
@@ -76,9 +83,11 @@ def save(sha, data):
     return data
 
 
-def delete(sha):
+def delete(sha, block_updates=False):
     """删掉一篇论文的本地记录（「重新生成」用：改了解析器/提示词之后要重跑）。"""
     p = store_path(sha)
+    if block_updates:
+        _REMOVED_RECORDS.add(sha)
     if os.path.isfile(p):
         os.remove(p)
         return True
@@ -87,8 +96,21 @@ def delete(sha):
 
 def merge(sha, patch, path=None):
     """增量写入：解析 / 摘要 / 批注 / 体检 / 笔记 / 追问分批到达，每次都并进同一个文件。"""
+    bookmark = patch.get('reading_bookmark')
+    if isinstance(bookmark, dict) and 'bookmarks' in bookmark:
+        marks = bookmark['bookmarks']
+        if not isinstance(marks, list):
+            raise ValueError('书签格式不正确')
+        counts = {}
+        for mark in marks:
+            if not isinstance(mark, dict) or type(mark.get('page')) is not int or mark['page'] < 1:
+                raise ValueError('书签页码不正确')
+            page = mark['page']
+            counts[page] = counts.get(page, 0) + 1
+            if counts[page] > 3:
+                raise ValueError('每页最多添加三个书签')
     data = load(sha) or {"sha": sha, "notes": [], "asks": [], "annots": {}}
-    for k in ("parse", "summary", "summary_meta", "repro", "zhihu", "usage", "file", "size"):
+    for k in ("parse", "summary", "summary_meta", "repro", "zhihu", "usage", "file", "size", "reading_goal", "reading_discipline", "reading_bookmark", "repro_resources"):
         if k in patch and patch[k] is not None:
             data[k] = patch[k]
     if path:
@@ -106,6 +128,32 @@ def merge(sha, patch, path=None):
                     cur[str(v["idx"])] = v
         data["annots"] = cur
 
+    if "ask_review" in patch:
+        item=patch["ask_review"]
+        data.setdefault("ask_reviews",{})[item["id"]]=item
+
+    if "claim_review" in patch:
+        item = patch["claim_review"]
+        data.setdefault("claim_reviews", {})[item["id"]] = item
+    if "paragraph_explanation" in patch:
+        item = patch['paragraph_explanation']
+        data.setdefault('paragraph_explanations',{})[item['id']] = item
+
+    if "comparison_summary" in patch:
+        entry = patch["comparison_summary"]
+        data.setdefault("comparison_summaries", {})[entry["key"]] = entry["result"]
+    if "repro_profile" in patch:
+        entry = patch["repro_profile"]
+        data.setdefault("repro_profiles", {})[entry["key"]] = entry["result"]
+
+    if "figure_record" in patch:
+        record = patch["figure_record"]
+        # 仅由图表解读接口构造，不保存截图或 base64。
+        if isinstance(record, dict) and record.get("id"):
+            records = data.setdefault("figures", [])
+            records[:] = [r for r in records if r.get("id") != record["id"]]
+            records.append(record)
+
     if "note" in patch and isinstance(patch["note"], dict):
         notes = data.setdefault("notes", [])
         if patch["note"].get("text"):
@@ -117,6 +165,12 @@ def merge(sha, patch, path=None):
 
     if "ask" in patch and isinstance(patch["ask"], dict):
         data.setdefault("asks", []).append(patch["ask"])
+
+    if "del_figure" in patch:
+        data["figures"] = [r for r in data.get("figures", []) if r.get("id") != patch["del_figure"]]
+    if "del_ask" in patch:
+        data["asks"] = [r for r in data.get("asks", []) if r.get("id") != patch["del_ask"]]
+        data["ask_reviews"] = {k:r for k,r in data.get("ask_reviews",{}).items() if r.get("ask_id") != patch["del_ask"]}
 
     return save(sha, data)
 

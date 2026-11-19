@@ -15,7 +15,6 @@ import os
 import re
 import sys
 import threading
-import time
 import traceback
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 
@@ -23,7 +22,16 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(ROOT, "vendor", "pymupdf_pkg"))
 
 import llm  # noqa: E402
+import ask_check  # noqa: E402
+import ask_pipeline  # noqa: E402
+import summary_pipeline  # noqa: E402
+import claim_check  # noqa: E402
+import figure  # noqa: E402
+import paragraph_explain  # noqa: E402
 import repro  # noqa: E402
+import paper_compare
+import figure_catalogue
+import table_reader
 import store  # noqa: E402
 import zhihu  # noqa: E402
 import m1_parse  # noqa: E402  （要先把 vendor 路径塞进去，所以放在 sys.path 之后）
@@ -47,6 +55,8 @@ MIME = {
     ".js": "text/javascript; charset=utf-8",
     ".json": "application/json; charset=utf-8",
     ".svg": "image/svg+xml",
+    ".gif": "image/gif",
+    ".png": "image/png",
     ".pdf": "application/pdf",
 }
 
@@ -75,6 +85,7 @@ def parse_request(payload):
             "kind": p["kind"],
             "chars": len(p["text"]),
             "rects": p.get("rects", []),
+            **({"figure_rects":p["figure_rects"]} if p.get("figure_rects") else {}),
             "text": p["text"],
             "anchor": anchor_of(i, p["text"]),
         })
@@ -83,6 +94,7 @@ def parse_request(payload):
         "pages": max((p["page"] for p in out), default=0),
         "count": len(out),
         "parse_version": m1_parse.PARSE_VERSION,
+        "geometry_version": m1_parse.GEOMETRY_VERSION,
         "page_sizes": m1_parse.LAST_PAGE_SIZES,
         "paras": out,
     }
@@ -91,25 +103,26 @@ def parse_request(payload):
 _PARSE_CACHE = {}
 
 
-_REPRO_CACHE = {}
-
 
 def repro_cached(payload):
-    """复现体检结果也按「文件 + 修改时间」缓存：GitHub 查询和模型调用都不便宜。"""
-    rel = (payload or {}).get("path", "")
-    full = os.path.abspath(os.path.join(ROOT, rel))
-    stamp = None
-    if os.path.isfile(full):
-        stamp = (full, os.path.getmtime(full))
-        hit = _REPRO_CACHE.get(stamp)
-        if hit is not None:
-            return hit
+    discipline = payload.get("discipline", "general")
+    repro.discipline_profile(discipline)
+    resources = repro.normalize_resources(payload.get('resources'))
+    cache_key = repro.resource_cache_key(discipline, resources)
+    sha, _full, rel = paper_sha(payload)
+    cfg = llm.config()
+    signature = (cfg["base"], cfg["model"], repro.REPRO_VERSION)
+    with _STORE_LOCK:
+        data = store.load(sha) or {}
+        hit = (data.get("repro_profiles") or {}).get(cache_key)
+    if hit and hit.get("signature") == list(signature):
+        return {**hit, "cached": True}
     parsed = parse_cached(payload)
-    card, meta = repro.repro_check(parsed)
-    out = {"file": parsed["file"], "card": card, "meta": meta}
-    if stamp is not None:
-        _REPRO_CACHE[stamp] = out
-    return out
+    card, meta = repro.repro_check(parsed, discipline=discipline, resources=resources)
+    out = {"file": parsed["file"], "card": card, "meta": meta, "signature": list(signature)}
+    with _STORE_LOCK:
+        store.merge(sha, {"repro_profile": {"key": cache_key, "result": out}}, path=rel)
+    return {**out, "cached": False}
 
 
 def zhihu_cached(payload):
@@ -162,7 +175,32 @@ def paper_sha(payload):
     full = os.path.abspath(os.path.join(ROOT, rel))
     if not full.startswith(os.path.abspath(PAPERS_DIR)) or not full.lower().endswith(".pdf") or not os.path.isfile(full):
         raise ValueError("找不到这个 PDF：%s" % rel)
-    return store.sha_of(full), full, rel
+    sha = store.sha_of(full)
+    store.allow_updates(sha)
+    return sha, full, rel
+
+
+def delete_paper(payload):
+    """删除列表中的PDF，可选保留同内容哈希对应的阅读记录。"""
+    if DEMO:
+        raise ValueError("演示实例不允许删除论文")
+    rel = payload.get('path','')
+    keep = payload.get('keep_records',True)
+    if not isinstance(rel,str) or type(keep) is not bool:
+        raise ValueError('删除选项无效')
+    full = os.path.realpath(os.path.join(ROOT,rel))
+    root = os.path.realpath(PAPERS_DIR)
+    allowed = {os.path.normcase(root),os.path.normcase(os.path.join(root,'imported'))}
+    if (os.path.commonpath([root,full]) != root or os.path.normcase(os.path.dirname(full)) not in allowed
+            or not full.lower().endswith('.pdf') or not os.path.isfile(full)):
+        raise ValueError('只能删除论文列表中的PDF文件')
+    with _STORE_LOCK:
+        sha = store.sha_of(full)
+        os.remove(full)
+        if not keep:
+            store.delete(sha,block_updates=True)
+        _PARSE_CACHE.clear()
+    return {'ok':True,'keep_records':keep}
 
 
 def open_paper(payload):
@@ -182,6 +220,16 @@ def open_paper(payload):
                 "file": os.path.basename(full), "stale": True}
     with _STORE_LOCK:
         data = store.merge(sha, {}, path=rel)      # 顺手更新"最近打开"
+        if m1_parse.refresh_caption_geometry(full,data["parse"]):
+            data = store.save(sha,data)
+        if data.get("summary"):
+            repaired = summary_pipeline.repair_cached_overview(data["summary"])
+            if repaired is not data["summary"]:
+                data["summary"] = repaired
+                data = store.save(sha,data)
+        if data.get("figures"):
+            data["figures"] = figure.refresh_partial_labels(full, data["parse"], data["figures"])
+            data = store.save(sha, data)
     return {"cached": True, "sha": sha, "path": rel, "file": data.get("file"), "bundle": data}
 
 
@@ -189,7 +237,7 @@ def save_paper(payload):
     """前端每跑完一段（解析 / 摘要 / 批注 / 体检）就把结果并进本地书库。"""
     sha, full, rel = paper_sha(payload)
     patch = {k: payload.get(k) for k in
-             ("parse", "summary", "summary_meta", "repro", "annots", "note", "del_note", "ask", "usage") if k in payload}
+             ("parse", "summary", "summary_meta", "repro", "annots", "note", "del_note", "ask", "usage", "del_figure", "del_ask", "reading_goal", "reading_discipline", "reading_bookmark", "repro_resources") if k in payload}
     patch["file"] = os.path.basename(full)
     patch["size"] = os.path.getsize(full)
     with _STORE_LOCK:
@@ -347,15 +395,108 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         route = self.path.split("?")[0]
+        if route == '/api/export-notes':
+            from urllib.parse import parse_qs, quote
+            try:
+                length=int(self.headers.get('Content-Length') or 0)
+                if not 0 < length <= 12*1024*1024:
+                    raise ValueError('导出内容大小无效')
+                fields=parse_qs(self.rfile.read(length).decode('utf-8'))
+                name=fields.get('name',[''])[0].replace('\\','/').split('/')[-1]
+                ext=os.path.splitext(name)[1].lower()
+                if ext not in ('.md','.html'):raise ValueError('导出格式无效')
+                body=('\ufeff'+fields.get('content',[''])[0]).encode('utf-8')
+                self.send_response(200)
+                self.send_header('Content-Type','text/html; charset=utf-8' if ext=='.html' else 'text/markdown; charset=utf-8')
+                self.send_header('Content-Disposition',"attachment; filename=paperprism-notes%s; filename*=UTF-8''%s" % (ext,quote(name,safe='')))
+                self.send_header('Content-Length',str(len(body)))
+                self.send_header('Cache-Control','no-store')
+                self.end_headers();self.wfile.write(body)
+            except (ValueError,UnicodeError) as exc:
+                self.send_json({'error':str(exc)},400)
+            return
         if route == "/api/upload":            # 拖进来的 PDF：原始字节直传，存 papers/imported/
             return self.handle_upload()
-        if route not in ("/api/parse", "/api/jump1", "/api/annotate", "/api/ask", "/api/repro",
-                         "/api/open", "/api/store", "/api/forget", "/api/zhihu",
-                         "/api/settings", "/api/settings/test"):
+        if route not in ("/api/table-read", "/api/figure-catalogue", "/api/compare", "/api/parse", "/api/jump1", "/api/annotate", "/api/ask", "/api/repro",
+                         "/api/open", "/api/store", "/api/forget", "/api/zhihu", "/api/paper/delete", "/api/explain",
+                         "/api/settings", "/api/settings/test", "/api/figure", "/api/claim-check", "/api/ask-check"):
             return self.send_json({"error": "unknown api"}, 404)
         try:
             n = int(self.headers.get("Content-Length") or 0)
             payload = json.loads(self.rfile.read(n).decode("utf-8") or "{}")
+            if route == '/api/table-read':
+                sha,full,rel = paper_sha(payload)
+                parsed = parse_cached(payload)
+                idx = payload.get('idx')
+                if type(idx) is not int:
+                    raise ValueError('表格段号无效')
+                return self.send_json(table_reader.read_table(full, parsed, idx))
+            if route == '/api/figure-catalogue':
+                sha,full,rel=paper_sha(payload)
+                parsed=parse_cached(payload)
+                return self.send_json({'items':figure_catalogue.catalogue(full,parsed)})
+            if route == '/api/compare':
+                paths = payload.get('paths')
+                if not isinstance(paths,list) or not 2 <= len(paths) <= 3 or any(not isinstance(path,str) for path in paths) or len(set(paths)) != len(paths):
+                    raise ValueError('请选择两到三篇不同论文')
+                documents=[]
+                seen_hashes=set()
+                for path in paths:
+                    sha,full,rel=paper_sha({'path':path})
+                    if sha in seen_hashes:
+                        raise ValueError('所选文件包含同一论文的副本，请选择不同论文')
+                    seen_hashes.add(sha)
+                    bundle=store.load(sha) or {}
+                    parsed=bundle.get('parse')
+                    if not parsed or parsed.get('parse_version') != m1_parse.PARSE_VERSION:
+                        raise ValueError('请先打开并完成所选论文的解析')
+                    documents.append({'path':rel,'file':os.path.basename(full),'parse':parsed,'sha':sha})
+                comparison = paper_compare.compare_documents(documents)
+                if payload.get('explain') is True:
+                    cfg = llm.config()
+                    summaries = []
+                    total = {}
+                    for column, document in enumerate(documents):
+                        sources = paper_compare.summary_sources(comparison, column, document['parse'])
+                        key = paper_compare.cache_key(sources, cfg)
+                        with _STORE_LOCK:
+                            cached = ((store.load(document['sha']) or {}).get('comparison_summaries') or {}).get(key)
+                        if cached and (payload.get('refresh') is not True or
+                                       all(topic in cached.get('items', {}) for topic in paper_compare.TOPICS)):
+                            summaries.append({**cached, 'cached': True, 'sources':sources})
+                            continue
+                        try:
+                            result = paper_compare.summarize(sources, cfg)
+                            total = llm.merge_usage(total, result['usage'])
+                            if result['items']:
+                                with _STORE_LOCK:
+                                    store.merge(document['sha'], {'comparison_summary': {'key':key, 'result':result}}, path=document['path'])
+                            summaries.append({**result, 'cached':False, 'sources':sources})
+                        except (ValueError, RuntimeError, TypeError, KeyError) as error:
+                            summaries.append({'items':{}, 'error':str(error), 'cached':False})
+                    comparison['summaries'] = summaries
+                    comparison['meta'] = {'usage':total, 'cost':llm.usage_info(total, cfg['model'])}
+                    comparison['note'] = '中文概括已逐篇自动核对原文；仅覆盖下列候选材料，缺失不代表全文未讨论。不同任务、样本与指标不直接排名。'
+                return self.send_json(comparison)
+            if route == "/api/paper/delete":
+                return self.send_json(delete_paper(payload))
+            if route == "/api/explain":
+                sha,_,rel = paper_sha(payload)
+                parsed = parse_cached(payload)
+                idx = payload.get('idx')
+                if type(idx) is not int:
+                    raise ValueError('段号无效')
+                sources = paragraph_explain.sources_for(parsed,idx)
+                cfg = llm.config()
+                key = paragraph_explain.cache_key(sources,cfg)
+                with _STORE_LOCK:
+                    cached = ((store.load(sha) or {}).get('paragraph_explanations') or {}).get(key)
+                if cached:
+                    return self.send_json({'explanation':cached,'cached':True})
+                result = paragraph_explain.complete(sources,cfg)
+                with _STORE_LOCK:
+                    store.merge(sha,{'paragraph_explanation':result},path=rel)
+                return self.send_json({'explanation':result,'cached':False})
             if route == "/api/settings":       # 保存模型配置（写 settings.json，不重启即生效）
                 if DEMO:                       # 演示实例不允许访客改 key / 换厂商
                     return self.send_json({"error": "演示实例已锁定模型设置"}, 403)
@@ -379,6 +520,53 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json(save_paper(payload))
             if route == "/api/repro":
                 return self.send_json(repro_cached(payload))
+            if route == "/api/ask-check":
+                sha, _full, rel = paper_sha(payload)
+                with _STORE_LOCK:
+                    book = store.load(sha) or {}
+                record = next((r for r in book.get("asks",[]) if r.get("id")==payload.get("ask_id")), None)
+                if not record:
+                    return self.send_json({"error":"追问记录不存在或已删除"},400)
+                key = ask_check.cache_key(record,llm.config())
+                cached = (book.get("ask_reviews") or {}).get(key)
+                if cached:return self.send_json({"review":cached,"cached":True})
+                result = ask_check.review(record)
+                with _STORE_LOCK:
+                    current = store.load(sha) or {}
+                    if not any(r.get("id")==record["id"] for r in current.get("asks",[])):
+                        return self.send_json({"error":"该记录已被删除，核查结果未保存"},400)
+                    store.merge(sha,{"ask_review":result},path=rel)
+                return self.send_json({"review":result,"cached":False})
+            if route == "/api/claim-check":
+                sha, _full, rel = paper_sha(payload)
+                parsed = parse_cached(payload)
+                with _STORE_LOCK:
+                    book = store.load(sha) or {}
+                claim = next((c for c in (book.get("summary") or {}).get("claims", [])
+                              if c.get("idx") == payload.get("idx") and c.get("claim") == payload.get("claim")), None)
+                if not claim:
+                    return self.send_json({"error":"摘要记录已变化或尚未保存，请重新打开论文后核查"}, 400)
+                source = next((p["text"] for p in parsed["paras"] if llm.pidx(p) == claim["idx"]), None)
+                if source is None:
+                    return self.send_json({"error":"所引段落不可用"}, 400)
+                key = claim_check.cache_key(claim,source,llm.config())
+                cached = (book.get("claim_reviews") or {}).get(key)
+                if cached:
+                    return self.send_json({"review":cached,"cached":True})
+                result = claim_check.review(claim,source)
+                with _STORE_LOCK:
+                    store.merge(sha,{"claim_review":result},path=rel)
+                return self.send_json({"review":result,"cached":False})
+            if route == "/api/figure":
+                parsed = parse_cached(payload)
+                sha, full, rel = paper_sha(payload)
+                try:
+                    result = figure.explain(full, parsed, payload)
+                except figure.FigureOutputError as exc:
+                    return self.send_json({"error": str(exc), "meta": exc.meta}, 400)
+                with _STORE_LOCK:
+                    store.merge(sha, {"figure_record": result["record"]}, path=rel)
+                return self.send_json(result)
             if route == "/api/ask":
                 # 追问：选中段 + 检索命中的段落 + 摘要要点
                 parsed = parse_cached(payload)
@@ -387,16 +575,13 @@ class Handler(SimpleHTTPRequestHandler):
                     return self.send_json({"error": "问题为空"}, 400)
                 idx = payload.get("idx")
                 idx = int(idx) if isinstance(idx, (int, float)) else None
-                res = llm.ask(parsed, q, idx=idx, summary=payload.get("summary"))
-                try:                                   # 追问记录也进索引，方便复查
-                    sha, _full, rel = paper_sha(payload)
-                    rec = {"id": "q%d" % int(time.time() * 1000), "q": q, "idx": idx,
-                           "a": res.get("answer"), "used": res.get("used"), "ts": int(time.time())}
-                    with _STORE_LOCK:
-                        store.merge(sha, {"ask": rec}, path=rel)
-                except Exception:
-                    traceback.print_exc()
-                return self.send_json({"file": parsed["file"], **res})
+                res = ask_pipeline.complete(parsed,q,idx=idx,summary=payload.get("summary"))
+                sha, _full, rel = paper_sha(payload)
+                patch = {"ask":res["record"]}
+                if res.get("review"):patch["ask_review"] = res["review"]
+                with _STORE_LOCK:
+                    store.merge(sha,patch,path=rel)
+                return self.send_json({"file":parsed["file"],**res})
             if route == "/api/annotate":
                 # 第二跳：给一批段落（3–4 段）写批注
                 parsed = parse_cached(payload)
@@ -407,7 +592,10 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json({"file": parsed["file"], "items": items, "meta": meta})
             # 第一跳：解析（带缓存）+ 结构化摘要
             parsed = parse_cached(payload)
-            summary, meta = llm.jump1(parsed)
+            summary, meta = summary_pipeline.complete(parsed)
+            sha, _full, rel = paper_sha(payload)
+            with _STORE_LOCK:
+                store.merge(sha,{"summary":summary,"summary_meta":meta},path=rel)
             return self.send_json({
                 "file": parsed["file"],
                 "count": parsed["count"],

@@ -224,15 +224,47 @@ def pick_queries(bundle):
 
 # ------------------------------------------------------------------ 组装卡片
 
+DISCUSSION_TOPICS = (
+    ('concept', '概念理解', ''),
+    ('experiment', '实验设计', '实验设计'),
+    ('reproduce', '复现困难', '复现 问题'),
+)
+
+
+def pick_topic_queries(bundle):
+    terms = pick_queries(bundle)
+    if not terms:
+        return []
+    # 三个方向沿用同一论文核心术语，保留搜索主题的可追溯性。
+    anchor = terms[0]
+    return [{**anchor, 'q': (anchor['q'] + ' ' + suffix).strip(),
+             'topic': key, 'topic_name': name, 'why': name}
+            for key, name, suffix in DISCUSSION_TOPICS][:MAX_QUERIES]
+
+
+def topic_matches(item, topic):
+    text = (item.get('title') or '') + ' ' + (item.get('snippet') or '')
+    patterns = {
+        'experiment': r'实验|测试|对照|样本|评测|测量|温度|experimental|protocol|evaluation|test',
+        'reproduce': r'复现|代码|源码|超参数|训练设置|训练参数|依赖|环境配置|报错|踩坑|复做|reproduc|implement|github|source code',
+    }
+    return topic not in patterns or bool(re.search(patterns[topic], text, re.I))
+
 def build_card(bundle, refresh=False):
     """返回 (card, is_cached)。card 直接给前端渲染，也原样存进书库。"""
     cached = bundle.get("zhihu")
     if cached and cached.get("status") in ("ok", "empty") and not refresh:
         card = dict(cached)
+        if any(q.get('topic') for q in cached.get('queries', [])):
+            card['queries'] = [{**q, 'items':[item for item in q.get('items',[]) if topic_matches(item,q.get('topic'))]}
+                               for q in cached['queries']]
+            card['total'] = sum(len(q['items']) for q in card['queries'])
+            if not card['total']:
+                card['status'],card['error']='empty',EMPTY_MSG['empty']
         card["cached"] = True
         return card, True
 
-    queries = pick_queries(bundle)
+    queries = pick_topic_queries(bundle)
     if not queries:
         return {
             "status": "nocontent",
@@ -248,7 +280,7 @@ def build_card(bundle, refresh=False):
             "status": "nokey",
             "error": EMPTY_MSG["nokey"],
             "ts": int(time.time()),
-            "queries": [{"q": q["q"], "term": q["term"], "why": q["why"], "url": manual_url(q["q"]),
+            "queries": [{**q, "url": manual_url(q["q"]),
                          "items": [], "error": None} for q in queries],
             "total": 0,
             "asked": 0,
@@ -265,7 +297,7 @@ def build_card(bundle, refresh=False):
                 continue
             it["score"] = _score(it, vocab, q["q"])
             scored.append(it)
-        strong = sorted([it for it in scored if it["score"] > 0], key=lambda x: -x["score"])
+        strong = sorted([it for it in scored if it["score"] > 0 and topic_matches(it,q.get('topic'))], key=lambda x: -x["score"])
         kept = strong[:PER_QUERY]
         for it in kept:
             seen_ids.add(it.get("url") or it.get("title"))
@@ -275,7 +307,7 @@ def build_card(bundle, refresh=False):
         if err:
             kinds.append(err[0])
             e = err[1]
-        out.append({"q": q["q"], "term": q["term"], "why": q["why"], "url": manual_url(q["q"]),
+        out.append({**q, "url": manual_url(q["q"]),
                     "items": kept, "error": e})
 
     total = sum(len(x["items"]) for x in out)

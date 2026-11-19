@@ -147,13 +147,13 @@ def _settings():
 
 
 def save_settings(patch):
-    """合并保存（只认 base/model/key 三个键，且空字符串=删掉这项、回退到 .env）。"""
+    """合并保存正文与视觉模型配置；空字符串删除该项并回退环境变量。"""
     global _SETTINGS
     cur = dict(_settings())
-    for k in ("base", "model", "key"):
+    for k in ("base", "model", "key", "vision_base", "vision_model", "vision_key"):
         if k in patch:
             v = str(patch.get(k) or "").strip()
-            if k == "base" and v:            # 有人会把整条 URL 粘进来，这里顺手清掉尾巴
+            if k in ("base", "vision_base") and v:            # 有人会把整条 URL 粘进来，这里顺手清掉尾巴
                 v = v.rstrip("/")
                 for tail in ("/chat/completions", "/completions"):
                     if v.endswith(tail):
@@ -199,6 +199,9 @@ def settings_info():
         "key_source": "settings" if s.get("key") else ("env" if env_key else "default"),
         "priced": bool(price_key(cfg["model"])),
         "settings_path": SETTINGS_PATH,
+        "vision_base": vision_config()["base"],
+        "vision_model": vision_config()["model"],
+        "vision_key_set": bool(vision_config()["key"]),
     }
 
 
@@ -211,6 +214,18 @@ def config():
         "key": key,
         "model": s.get("model") or os.environ.get("LLM_MODEL") or DEFAULT_MODEL,
     }
+
+
+def vision_config():
+    _load_dotenv()
+    s = _settings()
+    main = config()
+    base = (s.get("vision_base") or os.environ.get("VISION_BASE_URL") or main["base"]).rstrip("/")
+    return {"base": base,
+            "model": s.get("vision_model") or os.environ.get("VISION_MODEL")
+            or ("deepseek-flash" if base in ("https://api.deepseek.com", "https://api.deepseek.com/v1") else ""),
+            "key": s.get("vision_key") or os.environ.get("VISION_API_KEY")
+            or (main["key"] if base == main["base"] else "")}
 
 
 def has_key():
@@ -279,9 +294,9 @@ def _open(req, timeout):
     raise RuntimeError("没有可用的网络通道（直连与系统代理都没通）")
 
 
-def chat(messages, temperature=0.3, max_tokens=2400, timeout=120, json_mode=True):
+def chat(messages, temperature=0.3, max_tokens=2400, timeout=120, json_mode=True, cfg=None, thinking=None):
     """调一次 /chat/completions，返回 (文本, 用量 dict)。失败抛 RuntimeError（带可读原因）。"""
-    cfg = config()
+    cfg = cfg or config()
     if not cfg["key"]:
         raise RuntimeError(
             r"没有配置 API key：点右上角「设置」填进去（或写 .env 的一行 "
@@ -294,6 +309,8 @@ def chat(messages, temperature=0.3, max_tokens=2400, timeout=120, json_mode=True
         "max_tokens": max_tokens,
         "stream": False,
     }
+    if thinking is not None:
+        body["thinking"] = {"type": "enabled" if thinking else "disabled"}
     if json_mode:
         body["response_format"] = {"type": "json_object"}
 
@@ -322,16 +339,18 @@ def chat(messages, temperature=0.3, max_tokens=2400, timeout=120, json_mode=True
 
     try:
         data = json.loads(raw)
-        text = data["choices"][0]["message"]["content"]
+        choice = data["choices"][0]
+        text = choice["message"].get("content") or ""
     except Exception:
         raise RuntimeError("模型返回的结构不认识：%s" % raw[:400])
-    usage = data.get("usage") or {}
+    usage = dict(data.get("usage") or {})
+    usage["finish_reason"] = choice.get("finish_reason")
     return text, usage
 
 
-def chat_json(messages, temperature=0.3, max_tokens=2400, timeout=120):
+def chat_json(messages, temperature=0.3, max_tokens=2400, timeout=120, thinking=None):
     """要 JSON：剥掉 ```json 围栏再解析；解析不了抛 ValueError（好让上层重试）。"""
-    text, usage = chat(messages, temperature=temperature, max_tokens=max_tokens, timeout=timeout)
+    text, usage = chat(messages, temperature=temperature, max_tokens=max_tokens, timeout=timeout, thinking=thinking)
     return parse_json_loose(text), usage
 
 
@@ -412,6 +431,8 @@ SCHEMA_HINT = """请严格输出下面这个 JSON 结构（字段一个都不能
   "claims": [
     {"idx": 12, "claim": "这篇论文的主张，中文，不超过 30 字",
      "evidence": "它的证据是什么，中文，不超过 30 字",
+     "quote": "从idx对应原文逐字摘录支持该主张的连续片段，不超过220字符；找不到则空字符串",
+     "statement_type": "作者陈述 | 系统解释 | 待确认",
      "strength": "强 | 中 | 弱"}
   ],
   "glossary": [
@@ -424,7 +445,9 @@ SCHEMA_HINT = """请严格输出下面这个 JSON 结构（字段一个都不能
 - claims 给 6 到 8 条，且必须覆盖全文不同部分：至少 1 条来自引言/动机，1 到 2 条来自方法，至少 2 条来自实验或结果（Results / Experiments 小节，含关键数字），至少 1 条来自结论或局限。读完整篇再选，不要只用前半篇。
 - tl_dr 正好 3 句，分别回答：这篇解决什么问题、怎么做的、结果如何（有数字就写数字），不要「本文提出…」这种空话。
 - glossary 给 10 到 15 个术语，是读者读这篇最容易卡住的词（领域专有名词、缩写、方法名），不要给 AI/ML 的常识词。
-- 全部中文表述，但 term 保留英文原文。"""
+- quote 保留原文语言，不翻译、不拼接跨段句子、不改变数字或条件；该段不足以支持时标待确认，不能借段号掩盖不确定性。
+- 作者明确陈述与模型归纳推论分别标为作者陈述、系统解释；无法确定则待确认。
+- 除 quote 与 term 保留原文外，其他表述使用中文。"""
 
 
 def pidx(p):
@@ -496,6 +519,47 @@ def _s(v, limit):
     return re.sub(r"\s+", " ", str(v or "")).strip()[:limit]
 
 
+def match_source_quote(quote, source, recover_omissions=False, max_quote_chars=600, max_span_chars=1200):
+    """还原可验证的原文片段；忽略排版差异，不改变数值或逻辑符号。"""
+    if not isinstance(quote,str) or not quote.strip() or len(quote)>max_quote_chars:return ''
+    def canonical(text):
+        chars=[];positions=[];ends=[];groups=[];i=0
+        while i<len(text):
+            sub=re.match(r'_\{([A-Za-z0-9]{1,4})\}',text[i:])
+            if sub:
+                group_start=len(chars)
+                for j,c in enumerate(sub[1]):
+                    chars.append(c);positions.append(i if j==0 else i+2+j)
+                    ends.append(i+len(sub[0]) if j==len(sub[1])-1 else i+3+j)
+                groups.append((group_start,len(chars)))
+                i+=len(sub[0]);continue
+            c=text[i]
+            if c in '\u200b\u200c\u200d':i+=1;continue
+            if c.isspace():
+                if chars and chars[-1]!=' ':chars.append(' ');positions.append(i);ends.append(i+1)
+            else:chars.append('μ' if c=='µ' else c);positions.append(i);ends.append(i+1)
+            i+=1
+        return ''.join(chars),positions,ends,groups
+    original,positions,ends,groups=canonical(source)
+    candidate,_,_,_=canonical(quote.strip())
+    candidate=candidate.strip()
+    start=original.find(candidate)
+    end=start+len(candidate)
+    if start<0 and recover_omissions:
+        parts=[s.strip() for s in re.split(r'\.\.\.|…',candidate)]
+        if not 2<=len(parts)<=4 or any(len(s)<5 for s in parts):return ''
+        cursor=0;start=-1
+        for part in parts:
+            found=original.find(part,cursor)
+            if found<0:return ''
+            if start<0:start=found
+            cursor=found+len(part)
+        end=cursor
+    if start<0 or end<=start or end-start>max_span_chars:return ''
+    if any(a<start<b or a<end<b for a,b in groups):return ''
+    return ' '.join(source[positions[start]:ends[end-1]].split())
+
+
 def validate(summary, parsed):
     """把模型输出洗成可信的结构；不可信的条目直接丢，不猜。"""
     paras = parsed["paras"]
@@ -526,6 +590,8 @@ def validate(summary, parsed):
             "idx": idx,
             "claim": _s(c.get("claim"), 80),
             "evidence": _s(c.get("evidence"), 80),
+            "quote": match_source_quote(c.get("quote"), para["text"]),
+            "statement_type": c.get("statement_type") if c.get("statement_type") in ("作者陈述", "系统解释", "待确认") else "待确认",
             "strength": _s(c.get("strength"), 2) if _s(c.get("strength"), 2) in STRENGTH else "中",
             "anchor": {"idx": idx, "head": para["anchor"]["head"]},
         })
@@ -680,6 +746,12 @@ def build_reduce_messages(parsed, notes):
             lines.append("  术语：" + "、".join(
                 (t.get("term", "") if isinstance(t, dict) else str(t)) for t in n["terms"][:10]))
 
+    # 汇总笔记不能充当原文；同时提供其引用段落，供模型逐字摘录。
+    by_idx = {pidx(p): p for p in paras}
+    source_ids = list(dict.fromkeys(pt.get("idx") for n in notes for pt in n.get("points", [])[:12]
+                                   if isinstance(pt, dict) and type(pt.get("idx")) is int and pt["idx"] in by_idx))
+    allowance = min(1800, 32000 // max(1, len(source_ids)))
+    originals = ["[%d] %s" % (idx, by_idx[idx]["text"][:allowance]) for idx in source_ids]
     head = []
     if title:
         head.append("论文标题：" + title)
@@ -689,16 +761,18 @@ def build_reduce_messages(parsed, notes):
         "\n".join(head)
         + "\n\n这是一篇长论文的分块精读笔记（按原文顺序）：\n"
         + "\n".join(lines)
+        + "\n\n以下为笔记所引段落的原文选段，quote只能从这些原文摘录，不能把中文笔记当原文：\n"
+        + "\n\n".join(originals)
         + "\n\n请基于整篇的笔记做总结（不要只看开头几块；claims 的 idx 用笔记里方括号中的编号）。\n\n"
         + SCHEMA_HINT
     )
     return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}]
 
 
-def jump1(parsed):
+def jump1(parsed, budget_override=None):
     """第一跳：值不值得读 + 三句 TL;DR + claims + 术语表。返回 (summary, meta)。"""
     t0 = time.time()
-    budget = budget_for(parsed)
+    budget = budget_override if budget_override is not None else budget_for(parsed)
     total = sum(len(p["text"]) + 8 for p in parsed["paras"] if p["kind"] != "title")
     mode, chunks, map_tokens, map_usage = "single", 0, 0, {}
     if total > budget:
@@ -711,7 +785,8 @@ def jump1(parsed):
     last_err = None
     for attempt, temp in enumerate((0.3, 0.1)):
         try:
-            raw, usage = chat_json(messages, temperature=temp)
+            raw, usage = chat_json(messages, temperature=temp, max_tokens=4096,
+                                   thinking=False if config()["base"] in ("https://api.deepseek.com", "https://api.deepseek.com/v1") else None)
             summary, ok = validate(raw, parsed)
             if ok:
                 return summary, {
@@ -1136,7 +1211,8 @@ def annotate_batch(parsed, idxs, timeout=120):
 
 ASK_SYSTEM = (
     "你是论文精读助手，回答读者对这篇论文的具体疑问。只依据给你的材料回答；"
-    "材料不足以回答时直接说「材料里没写」，并指出还需要哪部分内容。"
+    "材料不足以回答时直接说「本次提供的材料不足」，并指出还需要哪部分内容；不能据此断言整篇论文没写。"
+    "摘要要点是辅助理解，不是原文证据；只引用本次明确提供的原文段落，不为摘要补造段号。"
     "中文，先给结论再给依据，180 字以内，不要寒暄。引用材料时写成 [#段落编号]。"
 )
 
@@ -1152,45 +1228,71 @@ def _tokens(t):
 
 
 def retrieve(parsed, question, k=3, exclude=None):
-    """最土的检索：问题里的实词在段落里出现几次，就排多前。"""
+    """用跨语言检索词匹配原文，稀有术语优先于全篇反复出现的缩写。"""
+    import math
     paras = parsed["paras"]
-    terms = set(_tokens(question))
-    if not terms:
-        return []
-    scored = []
-    for i, p in enumerate(paras):
-        if i == exclude or p.get("kind") not in ("body", "heading"):
-            continue
-        toks = _tokens(p.get("text", "")[:1500])
-        if not toks:
-            continue
-        same = set(toks) & terms
-        if not same:
-            continue
-        hit = sum(1 for w in toks if w in terms)
-        scored.append((hit + 0.5 * len(same), i))
-    scored.sort(key=lambda x: (-x[0], x[1]))
-    return [i for _, i in scored[:k]]
+    stem = lambda word: word[:-1] if len(word)>4 and word.endswith('s') else word
+    terms={stem(t) for t in _tokens(question)}
+    docs={i:[stem(t) for t in _tokens(p.get('text',''))] for i,p in enumerate(paras)
+          if i!=exclude and p.get('kind') in ('body','heading')}
+    scored=[]
+    for i,tokens in docs.items():
+        present=set(tokens)&terms
+        if not present:continue
+        score=sum((1+math.log(1+tokens.count(term)))*math.log(1+len(docs)/(1+sum(term in other for other in docs.values()))) for term in present)
+        scored.append((score,i))
+    return [i for _,i in sorted(scored,key=lambda v:(-v[0],v[1]))[:k]]
+
+
+def search_query(parsed, question, idx=None):
+    """仅将问题改写为检索词，结果不作为回答事实。"""
+    if not re.search(r'[\u4e00-\u9fff]',question):return question,{}
+    cfg=config()
+    options={'thinking':False} if cfg['base'] in ('https://api.deepseek.com','https://api.deepseek.com/v1') else {}
+    title=parsed.get('title') or next((p['text'] for p in parsed['paras'] if p.get('kind')=='title'),'')
+    selected=parsed['paras'][idx]['text'][:300] if idx is not None and 0<=idx<len(parsed['paras']) else ''
+    usage={}
+    aliases={'原料':'synthesis formulation monomer curing agent ingredients composition',
+             '组成':'synthesis constituent composition monomer ingredients',
+             '形变':'deformation glass transition temperature heating cooling shape fixation recovery',
+             '优点':'advantages benefits discussion', '缺点':'limitations drawbacks discussion',
+             '优缺点':'advantages limitations discussion challenges'}
+    intent=' '.join(v for key,v in aliases.items() if key in question)
+    try:
+        text,usage=chat([{'role':'system','content':'将中文论文阅读问题转换成英文原文检索词。只生成检索词，不回答问题，不虚构论文事实。给出问题的专业词、通用同义词和相关章节词；避免只输出在全文重复的论文主题或缩写。只输出JSON {"terms":[5到12个英文词或短语]}。'},
+                         {'role':'user','content':json.dumps({'question':question,'paper_title':title,'selected_context':selected},ensure_ascii=False)}],
+                        cfg=cfg,json_mode=True,max_tokens=500,**options)
+        raw=json.loads(text)
+        terms=raw.get('terms',[])
+        if isinstance(terms,list) and any(isinstance(t,str) for t in terms):
+            return intent+' '+' '.join(t[:80] for t in terms[:12] if isinstance(t,str)),usage
+    except (ValueError,RuntimeError,TypeError,AttributeError):pass
+    return question+' '+intent,usage
 
 
 def ask(parsed, question, idx=None, summary=None, timeout=120):
-    """回答一个追问：材料 = 选中段 + 检索命中的 3 段 + 摘要要点。"""
+    """回答一个追问：材料 = 选中段 + 跨语言检索的相关原文 + 摘要要点。"""
     import time as _t
 
     paras = parsed["paras"]
-    picked = retrieve(parsed, question, 3, exclude=idx)
+    query, query_usage = search_query(parsed, question, idx)
+    picked = retrieve(parsed, query, 4, exclude=idx)
     if not picked and summary:
         # 中文提问检索不到英文词：退而用摘要里的主张段当材料
         picked = [c["idx"] for c in (summary.get("claims") or [])[:3]
                   if isinstance(c.get("idx"), int) and 0 <= c["idx"] < len(paras)]
     blocks = []
+    provided = []
     if idx is not None and 0 <= idx < len(paras):
-        blocks.append("[#%d 读者选中] %s" % (idx, paras[idx]["text"][:900]))
+        blocks.append("[#%d 读者选中] %s" % (idx, paras[idx]["text"][:3500]))
+        provided.append(idx)
     for i in picked:
-        blocks.append("[#%d] %s" % (i, paras[i]["text"][:900]))
+        blocks.append("[#%d] %s" % (i, paras[i]["text"][:3500]))
+        provided.append(i)
     if not blocks:
         for i in range(min(3, len(paras))):
-            blocks.append("[#%d] %s" % (i, paras[i]["text"][:900]))
+            blocks.append("[#%d] %s" % (i, paras[i]["text"][:3500]))
+            provided.append(i)
     ctx = ""
     if summary:
         ctx = "摘要要点：%s\n关键主张：%s\n" % (
@@ -1210,11 +1312,23 @@ def ask(parsed, question, idx=None, summary=None, timeout=120):
         max_tokens=900,
         timeout=timeout,
         json_mode=False,
+        thinking=False if config()["base"] in ("https://api.deepseek.com", "https://api.deepseek.com/v1") else None,
     )
-    used = ([idx] if idx is not None else []) + picked
+    if not isinstance(text, str) or not text.strip() or usage.get("finish_reason") == "length":
+        raise ValueError("追问未返回完整回答，请重试")
+    usage = merge_usage(usage, query_usage)
+    text = re.sub(r'\*\*(.+?)\*\*', r'\1', text, flags=re.S)
+    used = list(dict.fromkeys(provided))
+    references = list(dict.fromkeys(int(a or b) for a, b in re.findall(r"\[\s*#(\d+)\s*\]|#(\d+)", text)))
+    sources = [{"idx":i,"page":paras[i]["page"],"text":paras[i]["text"][:3500],
+                "truncated":len(paras[i]["text"]) > 3500} for i in used]
     return {
-        "answer": (text or "").strip(),
+        "answer": text.strip(),
         "used": used,
+        "sources": sources,
+        "cited": [i for i in references if i in used],
+        "unverified_citations": [i for i in references if i not in used],
+        "citation_version": 1,
         "meta": {"ms": int((_t.time() - t0) * 1000), "usage": usage or {},
                  "retrieved": picked, "cost": usage_info(usage, config()["model"])},
     }
