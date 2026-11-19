@@ -1,0 +1,203 @@
+/* 暖纸色主题下的统一操作按钮。 */
+:root {
+  --button-ink: #954721;
+  --button-soft: #f9eee5;
+  --button-hover: #f2e1d3;
+  --button-primary: color-mix(in srgb, var(--accent) 92%, white);
+}
+body button,
+body :is(#bar, #panel, #readalong-card, #delete-paper-dialog, .setacts, header) button {
+  appearance: none;
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 1.65;
+  padding: 4px 10px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: var(--button-soft);
+  color: var(--button-ink);
+  cursor: pointer;
+  box-shadow: none;
+  transition: background-color .15s, color .15s, box-shadow .15s;
+}
+body button:hover:not(:disabled),
+body :is(#bar, #panel, #readalong-card, #delete-paper-dialog, .setacts, header) button:hover:not(:disabled) {
+  background: var(--button-hover);
+  color: #773713;
+  border-color: transparent;
+}
+body button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+body button:disabled { opacity: .45; cursor: default; }
+body :is(#go, #askgo, #figure-explain, #repro-evaluate, #setsave),
+body button.primary,
+body #panel button.noteadd {
+  background: var(--button-primary);
+  color: #fffdf8;
+  border-color: transparent;
+}
+body :is(#go, #askgo, #figure-explain, #repro-evaluate, #setsave):hover:not(:disabled),
+body button.primary:hover:not(:disabled),
+body #panel button.noteadd:hover:not(:disabled) { background: #a25535; color: #fffdf8; }
+body #bar #figure-toggle[aria-pressed="true"],
+body #panel #rhead button.on { background: var(--button-primary); color: #fffdf8; }
+body #tabs button.tab {
+  background: transparent;
+  color: #8a6c57;
+  border: 0;
+  border-radius: 6px 6px 0 0;
+  padding: 6px 10px;
+  margin-bottom: 0;
+}
+body #tabs button.tab.on {
+  color: var(--accent);
+  background: #faeee5;
+  box-shadow: inset 0 -2px var(--accent);
+}
+body #panel button.cite,
+body #readalong-card button.readalong-link,
+body button.readalong-link {
+  display: inline;
+  background: #faf1e9;
+  color: var(--button-ink);
+  border: 0;
+  border-radius: 4px;
+  padding: 0 4px;
+  font: inherit;
+}
+body #panel button.record-delete,
+body #panel button.notedel,
+body #readalong-card header button {
+  background: transparent;
+  color: #ab7455;
+  border: 0;
+  padding: 4px;
+}
+body #panel button.record-delete:hover:not(:disabled),
+body #panel button.notedel:hover:not(:disabled),
+body #bar #delete-paper:hover:not(:disabled),
+body #delete-paper-dialog #delete-paper-confirm:hover:not(:disabled) { background: #f8ded4; color: #a13e29; }
+body #panel .legend button {
+  padding: 2px 7px;
+  color: #fff;
+  border: 0;
+  border-radius: 5px;
+}
+body #panel .legend button.on { outline: 2px solid rgba(181, 143, 111, .32); outline-offset: 2px; }
+body #panel .legend button:hover:not(:disabled) { color: #fff; filter: brightness(.94); }
+body #panel .legend button.role-all { background: var(--button-primary); }
+body #panel .legend button.mk-背景 { background: #8a8f98; }
+body #panel .legend button.mk-缺口 { background: #c0563f; }
+body #panel .legend button.mk-方法 { background: #2f6f9f; }
+body #panel .legend button.mk-证据 { background: #2e7d54; }
+body #panel .legend button.mk-局限 { background: #8a6bb0; }
+body #panel .legend button.mk-背景:hover:not(:disabled) { background: #8a8f98; }
+body #panel .legend button.mk-缺口:hover:not(:disabled) { background: #c0563f; }
+body #panel .legend button.mk-方法:hover:not(:disabled) { background: #2f6f9f; }
+body #panel .legend button.mk-证据:hover:not(:disabled) { background: #2e7d54; }
+body #panel .legend button.mk-局限:hover:not(:disabled) { background: #8a6bb0; }
+body #panel .legend button { background-image: linear-gradient(#ffffff14, #ffffff14); }
+body #panel .legend button.mk-背景 { background-image: none; }
+body #panel .legend button.role-all,
+body #panel .legend button.role-all:hover:not(:disabled) { background: var(--button-primary); }
+
+/* 主张和阅读候选以纸色卡片承载正文。 */
+body #panel #sumcard button.claim,
+body #panel #task-guide button.claim {
+  background: #f7f2e9;
+  color: var(--ink);
+  border: 1px solid #e9e1d5;
+  padding: 7px 9px;
+  font: inherit;
+}
+body #panel #sumcard button.claim:hover:not(:disabled),
+body #panel #task-guide button.claim:hover:not(:disabled) {
+  background: #f3ecdf;
+  color: var(--ink);
+  border-color: rgba(181, 143, 111, .32);
+}
+body #panel #sumpane,
+body #panel #sumcard,
+body #panel #terms {
+  background: var(--paper);
+}
+body #panel .rep button.rk {
+  background:#fdf5e6;
+  color:var(--ink);
+  border:1px solid #ddc9a6;
+}
+body #panel .rep button.rk:hover:not(:disabled) {
+  background:#fdf5e6;
+  color:var(--ink);
+  border-color:#cbb28a;
+}
+body #readalong-card button.readalong-choice {
+  padding: 8px;
+  border: 1px solid transparent;
+  background: #fcf3eb;
+  color: var(--button-ink);
+}
+body #readalong-card button.readalong-choice[aria-pressed="true"] {
+  background: #f5e4d4;
+  box-shadow: inset 0 0 0 1px #bd835c;
+}
+@media (prefers-reduced-motion: reduce) {
+  body button { transition: none; }
+}
+
+/* 解析按钮与标题共用主题色。 */
+body #bar #go {
+  background: var(--button-primary);
+  color: #fffdf8;
+}
+body #bar #go:hover:not(:disabled) {
+  background: #a25535;
+  color: #fffdf8;
+}
+
+/* 图号浮动入口整块填色，避免纸白外壳包着另一块底色。 */
+body .readalong-edge {
+  background: var(--button-soft);
+  border: 1px solid #d9bca5;
+  padding: 2px;
+  box-shadow: 0 2px 6px #71432312;
+}
+body .readalong-edge button.readalong-link {
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+body .readalong-edge button.readalong-link:hover:not(:disabled) {
+  background: var(--button-hover);
+}
+
+body #panel .rep button.st {
+  background:#eaf3e8;
+  color:#386648;
+  border:1px solid #bfd5b9;
+}
+body #panel .rep button.st:hover:not(:disabled) {
+  background:#e0eddd;
+  color:#2f593d;
+  border-color:#aac5a5;
+}
+#brand-menu {position:relative;flex:none}
+#bar #brand-menu > summary {
+  list-style:none;cursor:pointer;padding:3px 8px;border:1px solid rgba(180,83,42,.2);
+  border-radius:7px;background:transparent;white-space:nowrap;
+}
+#brand-menu > summary::-webkit-details-marker {display:none}
+#brand-menu > summary:focus-visible {outline:2px solid var(--accent);outline-offset:3px}
+#brand-menu > summary span {font-weight:400;opacity:.6;margin-left:3px}
+#brand-menu-panel {
+  position:absolute;left:0;top:calc(100% + 8px);z-index:100;
+  width:164px;padding:6px;background:var(--paper);border:1px solid #e2cdbb;
+  border-radius:9px;box-shadow:0 6px 22px #54351e1a;
+}
+body #bar #brand-menu-panel button {display:block;width:100%;margin:2px 0;text-align:left;background:transparent;padding:6px 10px}
+body #bar #brand-menu-panel button:hover:not(:disabled) {background:var(--button-soft)}
+#sumpane .summary-actions {display:flex;justify-content:flex-end;padding:8px 16px 0;background:var(--paper)}
+#sumpane .summary-actions button {font-size:11px;padding:3px 9px}
