@@ -1,7 +1,7 @@
 const fs = require('fs'), vm = require('vm'), assert = require('assert');
 class Element {
-  constructor() { this.style={}; this.events={}; this.classList={add(){},remove(){}}; }
-  append() {} appendChild() {} setAttribute() {} setPointerCapture() {} releasePointerCapture() {}
+  constructor() { this.style={}; this.events={}; this.children=[]; this.classList={add(){},remove(){}}; }
+  append(...children) { this.children.push(...children); } appendChild(child) { this.children.push(child); } setAttribute() {} setPointerCapture() {} releasePointerCapture() {}
   hasPointerCapture() { return false; }
   addEventListener(name, fn) { this.events[name]=fn; }
 }
@@ -20,6 +20,12 @@ const event = (x,y) => ({button:0,pointerId:1,clientX:x,clientY:y});
 handle.events.pointerdown(event(0,0));
 hit={matches:()=>true,dataset:{i:'1'}};
 handle.events.pointermove(event(50,50));
+const pet=nodes.find(node=>node.id==='kanshan'), dock=nodes.find(node=>node.id==='kanshan-dock');
+assert(dock.children.includes(pet));
+assert.strictEqual(pet.style.transform,'translate(50px,50px)');
+assert.strictEqual(dock.style.transform,undefined);
+const css=nodes.find(node=>node.textContent?.includes('#kanshan-dock::before')).textContent;
+assert(!css.includes('#kanshan::before'));
 assert.strictEqual(selections.length,0);
 handle.events.pointerup(event(50,50));
 assert.deepStrictEqual(selections,[1]); assert.strictEqual(drawer.open,true);
@@ -31,4 +37,8 @@ assert.strictEqual(selections.length,1);
 handle.onclick({detail:0}); assert.deepStrictEqual(selections,[1,0]);
 context.figureMode=true; context.syncKanshan();
 assert.strictEqual(nodes.find(node=>node.id==='kanshan').hidden,true);
+assert.strictEqual(dock.hidden,true);
+context.figureMode=false; context.syncKanshan();
+assert.strictEqual(dock.hidden,false);
+assert.strictEqual(pet.style.transform,'');
 console.log('PASS drag preview makes no request; drop selects once; blank/cancel ignored; keyboard entry; figure mode hides pet');

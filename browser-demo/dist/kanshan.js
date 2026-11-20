@@ -3,7 +3,9 @@ const kanshanStyle = document.createElement('style');
 kanshanStyle.textContent = `
   #kanshan {position:relative;flex:none;z-index:35;display:flex;align-items:flex-end;gap:3px;padding:6px 16px 10px;background:transparent;border:0}
   #kanshan[hidden] {display:none}
-  #kanshan::before {content:'';position:absolute;left:16px;right:16px;top:0;height:1px;background:rgba(169,139,111,.22)}
+  #kanshan-dock {position:relative;flex:none}
+  #kanshan-dock[hidden] {display:none}
+  #kanshan-dock::before {content:'';position:absolute;left:16px;right:16px;top:0;height:1px;background:rgba(169,139,111,.22)}
   body #panel #kanshan-handle {touch-action:none;background:transparent;border:0;padding:0;width:88px;height:88px;cursor:grab;box-shadow:none}
   body #panel #kanshan-handle:hover:not(:disabled) {background:transparent;border:0;box-shadow:none}
   #kanshan-handle img {width:100%;height:100%;object-fit:contain;pointer-events:none;user-select:none}
@@ -17,6 +19,8 @@ kanshanStyle.textContent = `
 document.head.appendChild(kanshanStyle);
 const kanshan = document.createElement('div');
 kanshan.id = 'kanshan';
+const kanshanDock = document.createElement('div');
+kanshanDock.id = 'kanshan-dock';
 const kanshanHandle = document.createElement('button');
 kanshanHandle.id = 'kanshan-handle';
 kanshanHandle.setAttribute('aria-label', '看山讲解选中段落，也可拖到段落上');
@@ -27,7 +31,8 @@ const kanshanActions = document.createElement('div');
 kanshanActions.className = 'kanshan-speech';
 const kanshanHint = document.createElement('small'); kanshanHint.textContent = '读到哪里卡住了？\n把我拖到那一段，我们一起读。\n也可以先选段，再点我。';
 kanshanActions.appendChild(kanshanHint);
-kanshan.append(kanshanHandle, kanshanActions); $('#panel').appendChild(kanshan);
+kanshan.append(kanshanHandle, kanshanActions);
+kanshanDock.appendChild(kanshan); $('#panel').appendChild(kanshanDock);
 let kanshanDrag = null;
 function clearKanshanTarget() {
   pagesEl.querySelectorAll('.kanshan-target').forEach(el => el.classList.remove('kanshan-target'));
@@ -39,6 +44,7 @@ function resetKanshanDrag() {
 }
 function syncKanshan() {
   kanshan.hidden = figureMode;
+  kanshanDock.hidden = figureMode;
   if (figureMode) resetKanshanDrag();
 }
 function setKanshanExplanationStatus(status) {
